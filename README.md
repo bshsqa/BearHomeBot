@@ -86,7 +86,9 @@ queue, Codex CLI 실행, Telegram 답장 전송을 모두 관리합니다. Codex
 
 Phase 8의 systemd service가 구현되기 전까지 이 process는 foreground로
 실행됩니다. terminal을 닫거나 `Ctrl+C`를 누르거나 PC를 재부팅하면
-종료되며 자동으로 다시 시작되지 않습니다.
+종료되며 자동으로 다시 시작되지 않습니다. 같은 PC를 재부팅한 경우에는
+설정을 다시 만들지 않고 `codex login status` 확인 후
+`start-telegram.sh`만 다시 실행하면 기존 local session을 사용합니다.
 
 3. 휴대폰에서 만든 봇에게 `/whoami`를 보내 숫자 사용자 ID를 확인합니다.
 4. 봇을 `Ctrl+C`로 멈추고 해당 ID를 로컬 allowlist에 추가합니다.

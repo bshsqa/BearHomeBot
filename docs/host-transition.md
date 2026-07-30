@@ -210,6 +210,49 @@ PC의 gateway를 다시 시작한다. 두 PC를 동시에 켜서 장애를 우�
 기존 session은 그대로 남아 있다. 대상 PC에서 새로 만든 session과는
 서로 독립적이다.
 
+## 같은 PC 종료와 재시작
+
+PC를 바꾸지 않고 같은 host를 껐다 켤 때는 fresh setup을 반복하지 않는다.
+다음 local 상태가 디스크에 그대로 남아 있기 때문이다.
+
+```text
+~/.config/bearhomebot/telegram.env
+~/.local/share/bearhomebot/state.sqlite
+~/.local/share/bearhomebot/codex-workspace/
+~/.local/share/bearhomebot/k-skill/
+~/.cache/bearhomebot/k-skill/
+~/.codex/
+```
+
+재부팅 후 Codex login이 유지되는지 확인하고 통합 process만 다시 실행한다.
+
+```bash
+cd BearHomeBot
+codex login status
+./scripts/start-telegram.sh
+```
+
+정상적으로 재시작하면 기존 allowlist, `/sessions`, active session, Codex
+thread ID, Telegram update checkpoint를 SQLite에서 읽는다. Codex의 local
+thread 파일도 같은 PC에 있으므로 다음 메시지는 기존 thread를 resume한다.
+
+단, 종료 시점에 메모리에서 실행 중이던 queue나 Codex turn은 자동으로
+이어 실행하지 않는다. 처리 중이던 Telegram update는 중복 작업을 피하기
+위해 자동 재시도되지 않을 수 있다. 종료 전에 가능하면 진행 중인 답변이
+끝날 때까지 기다리고 foreground terminal에서 `Ctrl+C`로 gateway를
+정상 종료한다.
+
+재시작 후 휴대폰에서 다음을 확인한다.
+
+```text
+/health
+/sessions
+```
+
+Codex authentication이 만료된 경우에만 `codex login`을 다시 수행한다.
+Phase 7에서 interrupted job recovery를, Phase 8에서 reboot 후 systemd
+자동 시작을 구현한다.
+
 ## 권장 이동 순서
 
 프로젝트가 운영 미니 PC에 정착하기 전까지는 다음 흐름을 사용한다.
