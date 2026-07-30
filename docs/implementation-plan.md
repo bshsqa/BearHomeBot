@@ -1,48 +1,49 @@
-# BearHomeBot Ubuntu Implementation Plan
+# BearHomeBot Ubuntu 구현 계획
 
-## 1. Purpose
+## 1. 목표
 
-BearHomeBot is an always-on home automation service that receives requests from
-approved Telegram users, asks Codex CLI to interpret and execute those requests,
-and uses a reviewed version of `k-skill` for Korean services such as KTX.
+BearHomeBot은 승인된 가족이 Telegram으로 요청하면 집의 Ubuntu PC에서
+Codex CLI가 요청을 해석하고, 검증된 `k-skill`과 사용자별 계정을 이용해
+작업하는 상시 실행 서비스다.
 
-The first supported operating environment is Ubuntu. Windows and WSL support are
-deferred until the Ubuntu service is stable.
+첫 번째 지원 환경과 운영 범위는 다음과 같다.
 
-The initial operating constraints are:
+- Ubuntu만 지원한다. Windows와 WSL 지원은 Ubuntu 운영이 안정된 뒤 검토한다.
+- Telegram 사용자는 최대 5명까지 등록한다.
+- 일반 대화와 작업 요청은 고정된 봇 명령을 제외하고 Codex CLI로 전달한다.
+- 사용자마다 독립된 여러 Codex thread를 가질 수 있으며, 그중 하나를
+  active session으로 선택해 사용한다.
+- Codex thread의 긴 context는 Codex의 자동 compaction에 맡기고,
+  BearHomeBot이 시간이나 turn 수를 기준으로 session을 자동 삭제하거나
+  교체하지 않는다.
+- 같은 사용자의 요청은 순서대로 처리한다.
+- 서로 다른 사용자는 전역 worker 제한 안에서 동시에 사용할 수 있다.
+- `k-skill`은 BearHomeBot 저장소에 포함하지 않는다.
+- 매일 00:00 `Asia/Seoul`에 새 `k-skill` 후보를 검증하고, 모든 필수 검사를
+  통과한 경우에만 활성 release를 교체한다.
+- 결제, 전자서명 등 되돌리기 어려운 작업은 별도 정책이 생기기 전까지
+  자동 실행하지 않는다.
 
-- Ubuntu is the only supported runtime.
-- Up to five Telegram users may be registered.
-- Requests from the same user are processed sequentially.
-- Requests from different users may run concurrently within a global worker limit.
-- `k-skill` is not included in the BearHomeBot Git repository.
-- A candidate `k-skill` release is never activated when any required check fails.
-- User credentials are never committed to Git, placed in a Codex prompt, or sent
-  through Telegram.
-- Payment, e-signature, and other irreversible actions are out of scope unless a
-  separate policy explicitly adds them.
+## 2. 절대 지켜야 할 경계
 
-## 2. Current State
+- Telegram 숫자 `user_id`만 사용자 신원으로 신뢰한다. username과
+  자연어에 포함된 사용자 ID는 권한 근거로 사용하지 않는다.
+- Telegram bot token, Codex 인증정보, Korail 계정 등 비밀정보는 Git,
+  Telegram 메시지, Codex prompt, 명령행 인자, 로그에 넣지 않는다.
+- Telegram gateway가 확인한 principal을 queue, runner, broker까지
+  구조화된 내부 값으로 전달한다.
+- Codex가 출력한 명령이나 자연어만으로 사용자, 권한, credential scope를
+  변경하지 않는다.
+- Codex는 credential을 복호화하거나 평문 값을 전달받지 않는다.
+- credential이 필요한 작업은 BearHomeBot이 검증한 typed operation으로만
+  Capability Broker에 요청한다.
+- 검증되지 않은 `k-skill` 후보에는 secret을 제공하지 않는다.
+- deterministic gate가 하나라도 실패하면 Codex 검토 결과와 관계없이
+  후보를 활성화하지 않는다.
+- shell 문자열 조합 대신 인자 배열을 사용해 child process를 직접 실행한다.
+- 로그와 사용자 응답에는 중앙 redaction 정책을 적용한다.
 
-At the time this document was written:
-
-- The BearHomeBot repository uses `main` and points `origin` to
-  `https://github.com/bshsqa/BearHomeBot.git`.
-- The local `k-skill` checkout is excluded from BearHomeBot Git and is not a
-  submodule or embedded repository.
-- The nested `k-skill` checkout is at commit
-  `42473dad91ca919fd21d6d8b7fc6dbae3fa48b2c`.
-- The Ubuntu bootstrap includes a read-only doctor, TypeScript app skeleton,
-  external runtime paths, tests, and install/start/stop scripts.
-- The current machine does not yet have rootless Podman installed.
-- Codex CLI is installed and supports `codex exec`, JSONL output, structured
-  output schemas, and resuming a session by ID.
-
-The existing checkout is only a local reference. Managed releases will always be
-materialized from a verified upstream commit without copying local changes or
-untracked files.
-
-## 3. Target Architecture
+## 3. 목표 아키텍처
 
 ```text
 Telegram Bot API
@@ -50,472 +51,567 @@ Telegram Bot API
        v
 Telegram Gateway
        |
-       +---- authenticated principal: Telegram numeric user_id
+       +---- trusted principal: Telegram numeric user_id
        |
        v
 Per-user Queue and Session Manager
        |
-       +---- Codex Runner: exec, resume, JSONL parsing
+       +---- multiple owned threads, one active session per user
        |
        v
-Capability Broker
+Codex Runner
        |
-       +---- public skill runner
+       +---- codex exec / resume / JSONL parsing
        |
-       +---- credentialed skill runner
-                  |
-                  v
-             Secret Broker
-                  |
-                  v
-        encrypted per-user secret vault
+       v
+Policy and Capability Broker
+       |
+       +---- public, read-only skill runner
+       |
+       +---- credentialed typed operation
+                         |
+                         v
+                    Secret Broker
+                         |
+                         v
+               encrypted per-user vault
 
 Nightly Updater
        |
        v
-k-skill candidate -> deterministic checks -> isolated tests -> Codex review
+k-skill candidate -> deterministic gates -> isolated tests -> Codex review
        |
        v
-atomic active-release promotion or no change
+atomic promotion or active release unchanged
 ```
 
-The Telegram identity attached by the gateway is the authority for user
-selection. A user ID written by Codex in natural language or generated command
-arguments is never treated as authorization.
+Telegram gateway, Codex runner, updater, capability runner, secret broker는
+논리적으로 분리한다. 운영 단계에서는 서로 다른 Unix service account와
+최소 권한으로 실행한다.
 
-## 4. Recommended Technology
+## 4. 기술 선택
 
-- Control plane: TypeScript on the current Node.js LTS release
-- Persistent state: SQLite
-- Service supervision: systemd
-- Logs: journald with application-level secret redaction
-- Candidate isolation: rootless Podman or an equivalent rootless OCI runtime
-- Skill executors: the Node.js and Python helpers shipped by the active
-  `k-skill` release
-- Telegram transport: long polling, so no inbound public port is required
+- 제어 애플리케이션: TypeScript, Node.js 24 LTS
+- 영속 상태: SQLite
+- 서비스 관리: systemd
+- 로그: journald와 애플리케이션 수준 redaction
+- Telegram 연결: long polling
+- 후보 코드 격리: rootless Podman 또는 동등한 rootless OCI runtime
+- Codex 연동: `codex exec --json`과 명시적인 sandbox 설정
+- 비밀정보 저장: 인증 암호화를 적용한 별도 vault
+- 운영 시간대: `Asia/Seoul`
 
-The application runs natively under systemd. Containers are used to evaluate
-untrusted candidate code and, later, to add stronger isolation around
-credential-bearing skill execution.
+Telegram은 long polling을 사용하므로 외부에서 집 PC로 들어오는 포트를
+열지 않는다.
 
-## 5. Filesystem Layout
+## 5. 저장 위치
 
-Production state is kept outside the Git checkout.
+### 5.1 개발 환경
 
 ```text
-/opt/bearhomebot/                         installed application
-/etc/bearhomebot/config.toml              non-secret configuration
-/etc/bearhomebot/master.key               initial root-owned vault key
-/var/lib/bearhomebot/state.sqlite          users, sessions, jobs, releases
-/var/lib/bearhomebot/k-skill/mirror.git    upstream Git mirror
-/var/lib/bearhomebot/k-skill/releases/     immutable releases by commit SHA
-/var/lib/bearhomebot-vault/vault.sqlite    encrypted user credentials
-/run/bearhomebot/secret-broker.sock        local broker socket
+BearHomeBot/                              Git checkout
+BearHomeBot/.runtime/                     Git에서 제외된 개발용 임시 상태
+~/.config/bearhomebot/telegram.env        bootstrap Telegram 설정, mode 0600
+~/.local/share/bearhomebot/               개발용 영속 상태
+~/.cache/bearhomebot/                     개발용 cache
 ```
 
-Development-only state belongs under a Git-ignored `.runtime/` directory. No
-real credentials are stored there.
+현재 Telegram token은 bootstrap 단계에서만 `telegram.env`에 보관한다.
+Codex child process에는 이 파일 경로나 token 환경변수를 전달하지 않는다.
 
-## 6. Sequential Implementation Plan
-
-### Phase 0: Record Decisions and Threat Model
-
-Tasks:
-
-- Confirm Ubuntu version, CPU architecture, timezone, and whether the target mini
-  PC has TPM 2.0.
-- Fix the initial upstream to `https://github.com/NomaDamas/k-skill.git` and the
-  allowed branch to `main`.
-- Define actions that require explicit user confirmation.
-- Define the first supported vertical slice as Telegram plus Codex plus KTX
-  search and reservation.
-- Define what happens when the machine is asleep or offline at midnight.
-
-Completion criteria:
-
-- The decisions are represented in version-controlled configuration or
-  architecture decision records.
-- The application timezone is explicitly `Asia/Seoul`.
-- A missed nightly run executes once after the next startup.
-
-### Phase 1: Create the BearHomeBot Foundation
-
-Tasks:
-
-- Initialize the BearHomeBot Git repository.
-- Add a root `README.md`, `.gitignore`, license decision, and project metadata.
-- Exclude the nested `k-skill` checkout and all runtime data from Git.
-- Never copy local changes or untracked files from an unmanaged checkout into a
-  managed `k-skill` release.
-- Add `scripts/install.sh`, `scripts/start.sh`, `scripts/stop.sh`, and
-  `scripts/doctor.sh`.
-- Make `doctor.sh` check Git, Node.js, npm, Python, Codex CLI, Podman, systemd,
-  free disk space, and the configured timezone.
-- Add unit-test, lint, type-check, and formatting commands.
-
-Completion criteria:
-
-- A fresh Ubuntu clone can run the doctor command and receive actionable setup
-  results.
-- No secret, runtime database, Codex session, or `k-skill` checkout can be added
-  by a normal `git add .`.
-
-### Phase 2: Implement the Safe k-skill Supply Chain
-
-Tasks:
-
-- Create and maintain a bare upstream mirror outside the project checkout.
-- Fetch `origin/main` and resolve the candidate to an exact commit SHA.
-- Refuse a changed remote URL, unexpected branch, submodule, path escape,
-  oversized file, or non-fast-forward history by default.
-- Materialize candidates into immutable release directories.
-- Compare the candidate with the active commit and create a machine-readable
-  change manifest.
-- Check dependency lockfiles and reject unapproved Git or arbitrary URL
-  dependencies.
-- Install dependencies without lifecycle scripts in an isolated build stage.
-- Run dependency advisory scans.
-- Run `npm run ci` and BearHomeBot contract tests in a secret-free container.
-- Disable network during candidate test execution unless a specific test has a
-  documented read-only exception.
-- Ask Codex to review only the candidate diff and manifest in a read-only
-  sandbox, with no secrets and a required JSON output schema.
-- Treat a high-risk Codex finding as a failed gate. A Codex pass never overrides
-  a deterministic failure.
-- Promote by updating the active commit in one SQLite transaction.
-- Keep at least three previous releases and support explicit rollback.
-
-Completion criteria:
-
-- Killing the updater at any point cannot corrupt the active release.
-- A failed or uncertain check leaves the active release unchanged.
-- Update results include the candidate SHA, each gate result, and a redacted log.
-- Running jobs keep their pinned release while new jobs use the newly active
-  release.
-
-### Phase 3: Implement Core State and Principals
-
-Tasks:
-
-- Create SQLite migrations for users, Telegram identities, Codex sessions,
-  jobs, account locks, releases, and audit events.
-- Identify users by Telegram numeric `user_id`, never by username.
-- Support `admin`, `member`, and `disabled` roles.
-- Add local admin commands for pairing, disabling, and listing users.
-- Reject group chats initially and accept only private chats from the allowlist.
-- Store user preferences separately from credentials.
-
-Completion criteria:
-
-- An unknown Telegram user cannot create a session or job.
-- Disabling a user immediately blocks new work.
-- Every request and privileged action has a principal and audit event.
-
-### Phase 4: Implement the Secret Broker
-
-Tasks:
-
-- Create a separate secret vault database owned by a dedicated service account.
-- Encrypt every secret value with an authenticated encryption algorithm such as
-  AES-256-GCM or XChaCha20-Poly1305.
-- Generate a random master key outside the application repository and state
-  database.
-- Initially load the master key as a root-managed systemd credential or from a
-  root-owned file with strict permissions.
-- Add master-key versioning so secrets can be rotated without changing their
-  external names.
-- Expose only allowlisted operations over a Unix domain socket.
-- Authenticate local callers and derive the user principal from the trusted
-  request context, not from model-generated text.
-- Add an import command for `~/.config/k-skill/secrets.env`.
-- Import values into one selected BearHomeBot user without deleting or modifying
-  the original file.
-- Add redaction tests for logs, errors, child-process output, and Telegram
-  messages.
-
-Completion criteria:
-
-- The Codex worker account cannot read the vault database, master key, or
-  decrypted credentials.
-- The application can list which credential names exist without revealing
-  values.
-- A secret is decrypted only inside the broker for one authorized operation.
-- Backup of only the normal state database does not expose credentials.
-
-### Phase 5: Implement the Codex Runner
-
-Tasks:
-
-- Start a new conversation with `codex exec --json`.
-- Capture `thread.started.thread_id` and associate it with the authenticated
-  BearHomeBot user.
-- Continue the conversation with `codex exec resume <session-id>`.
-- Make `세션 종료해` close the logical association. The next message creates a
-  new session.
-- Parse JSONL events and return only approved progress and final-message events
-  to Telegram.
-- Set a working directory, timeout, output limit, sandbox policy, and cancellation
-  behavior for every run.
-- Do not include raw secrets in the prompt, stdin, command line, environment, or
-  Codex-readable files.
-- Store a fixed system context containing BearHomeBot policy, the active
-  k-skill release, the authenticated principal's non-secret preferences, and
-  supported capability descriptions.
-
-Completion criteria:
-
-- Two users never share a Codex session ID.
-- A restarted BearHomeBot can resume stored sessions.
-- A timed-out or cancelled Codex process is terminated and recorded cleanly.
-- Logs and returned messages contain no secrets.
-
-### Phase 6: Implement the Telegram Gateway
-
-Tasks:
-
-- Store the Telegram bot token in the secret vault.
-- Use long polling with idempotent update handling.
-- Add commands for health, new session, end session, jobs, job cancellation, and
-  user identity display.
-- Acknowledge long requests quickly and send progress as edited messages with a
-  reasonable rate limit.
-- Add duplicate-update protection and per-user request size limits.
-- Route administrative messages only to admin principals.
-
-Completion criteria:
-
-- The bot opens no inbound network port.
-- Replayed Telegram updates cannot execute the same state-changing action twice.
-- Unknown users receive no system details.
-
-### Phase 7: Add the First k-skill Capability
-
-The first capability is KTX because it exercises user credentials, search,
-reservation, long-running monitoring, notifications, and account locking.
-
-Tasks:
-
-- Read KTX skill instructions only from the pinned active release.
-- Implement typed operations for login check, search, seat check, reservation
-  list, reservation creation, and cancellation.
-- Keep reservation and cancellation behind an explicit policy and confirmation
-  step.
-- Allow only Seoul-origin KTX and general-seat filters when those constraints are
-  present in the user's request.
-- Let the secret broker inject only `KSKILL_KTX_ID` and
-  `KSKILL_KTX_PASSWORD` into the KTX helper process.
-- Spawn the helper directly without a shell and with a minimal environment.
-- Redact the environment and known secret values from all output.
-- Write successful outcomes to structured job state and notify the requesting
-  Telegram user.
-
-Completion criteria:
-
-- Codex never receives the KTX ID or password.
-- User A cannot use or inspect User B's Korail credentials.
-- Concurrent operations using the same Korail account are serialized.
-- A reservation result includes a stable operation ID for duplicate prevention
-  and auditing.
-
-### Phase 8: Add Durable Jobs and Concurrency
-
-Tasks:
-
-- Give each user a FIFO queue.
-- Set a configurable global Codex worker limit, initially two.
-- Add per-provider and per-account locks.
-- Persist long-running monitoring jobs and their stop conditions.
-- Pin a k-skill release to each job.
-- Recover interrupted jobs conservatively after restart.
-- Add backoff, jitter, maximum duration, and external-service rate policies.
-
-Completion criteria:
-
-- Up to five users can submit work without mixing sessions or credentials.
-- The same user's conversational requests remain ordered.
-- Long-running jobs do not block ordinary status and cancellation commands.
-- Restart recovery cannot repeat a completed reservation.
-
-### Phase 9: Add Scheduling and Operations
-
-Tasks:
-
-- Create systemd services for the gateway, worker, secret broker, and updater.
-- Create a systemd timer for 00:00 `Asia/Seoul`.
-- Add a startup catch-up check for a missed daily update.
-- Add health checks for Telegram, Codex authentication, active k-skill release,
-  database migrations, disk space, and broker availability.
-- Send an admin notification when an update, migration, credential operation, or
-  health check fails.
-- Document backup and restore procedures.
-
-Completion criteria:
-
-- The service starts after reboot without an interactive terminal.
-- A failed nightly update leaves the previous release active.
-- Operators can identify the active commit and roll back with one command.
-
-### Phase 10: Security Hardening and Release
-
-Tasks:
-
-- Run the gateway, Codex worker, updater, and secret broker as separate Unix
-  service accounts.
-- Add restrictive systemd options such as private temporary directories,
-  protected system paths, no-new-privileges, and narrowly writable paths.
-- Apply full-disk encryption to the production mini PC when practical.
-- Move the vault master key to TPM-backed systemd credentials when the target
-  hardware supports it.
-- Add outbound network restrictions for credentialed skill runners, beginning
-  with Korail-only destinations for KTX.
-- Add secret rotation, encrypted recovery export, and restore drills.
-- Add a release checklist and a clean-Ubuntu installation test.
-
-Completion criteria:
-
-- A Codex or Telegram worker compromise does not directly reveal the vault.
-- A copied state database, Git repository, or ordinary backup contains no
-  plaintext credentials.
-- The documented restore path works on a second Ubuntu machine.
-
-## 7. Secret Storage Decision
-
-### 7.1 Current secrets.env
-
-The existing `~/.config/k-skill/secrets.env` is outside the repository and is a
-documented k-skill fallback. With mode `0600`, it is a reasonable baseline for
-one user manually invoking trusted local scripts.
-
-It is not the preferred production store for BearHomeBot because:
-
-- BearHomeBot serves multiple users.
-- Codex executes tools and can read files available to its Unix account.
-- The service runs unattended.
-- Candidate and active `k-skill` code executes on behalf of the service.
-- Plain dotenv files are easy to include accidentally in support bundles,
-  backups, shell output, or debugging sessions.
-- A shared file makes account separation and credential rotation harder.
-
-### 7.2 What encryption does and does not protect
-
-Application-level encryption is useful when the ciphertext database and the
-master key are separated. It protects against accidental database disclosure,
-ordinary backup leakage, and some cross-service file access.
-
-Encryption does not protect a secret from an attacker who controls the running
-secret broker, root account, kernel, or an already-unlocked host. If the
-decryption key is stored next to the encrypted database with the same owner and
-permissions, the added protection is limited.
-
-Full-disk encryption and application-level encryption address different risks:
-
-- Full-disk encryption protects data on a powered-off lost or stolen disk.
-- Application encryption protects a copied vault database or backup.
-- Process and account isolation prevents Codex and ordinary workers from reading
-  the vault directly.
-- Just-in-time injection reduces how long plaintext exists and where it appears.
-
-All four layers are useful; encryption alone is not the security boundary.
-
-### 7.3 Recommended BearHomeBot flow
+### 5.2 운영 환경
 
 ```text
-encrypted vault
-      |
-      | authorized operation with trusted user principal
-      v
+/opt/bearhomebot/                         설치된 애플리케이션
+/etc/bearhomebot/config.toml              비밀정보가 없는 설정
+/var/lib/bearhomebot/state.sqlite         사용자, 세션, 작업, release, 감사 기록
+/var/lib/bearhomebot/k-skill/mirror.git   upstream Git mirror
+/var/lib/bearhomebot/k-skill/releases/    commit SHA별 불변 release
+/var/lib/bearhomebot-vault/vault.sqlite   암호화된 사용자 credential
+/run/bearhomebot/secret-broker.sock       로컬 broker socket
+```
+
+Telegram bot token과 vault master key는 일반 설정 파일이 아니라
+root가 관리하는 systemd credential 또는 동등한 전용 secret 경로에서
+서비스에 주입한다.
+
+## 6. 단계별 구현 순서
+
+### Phase 0: 운영 결정과 위협 모델
+
+상태: 진행 중
+
+작업:
+
+- 목표 mini PC의 Ubuntu 버전, CPU architecture, timezone을 확인한다.
+- TPM 2.0 지원 여부와 LUKS full-disk encryption 적용 여부를 확인한다.
+- `k-skill` upstream을 `https://github.com/NomaDamas/k-skill.git`, 허용
+  branch를 `main`으로 version-controlled 설정에 고정한다.
+- 예약, 취소, 결제 등 명시적 사용자 확인이 필요한 action을 정의한다.
+- PC가 00:00에 꺼져 있을 때 다음 부팅 후 누락된 update를 한 번 실행하도록
+  정책을 정한다.
+- log 보존 기간, backup 범위, 장애 알림 대상을 정한다.
+
+완료 조건:
+
+- 결정 사항이 configuration 또는 ADR로 저장된다.
+- 애플리케이션 timezone이 `Asia/Seoul`로 고정된다.
+- 허용 action과 금지 action의 기본 정책이 테스트 가능한 형태로 정의된다.
+
+### Phase 1: Ubuntu 프로젝트 기반
+
+상태: bootstrap 완료
+
+구현 내용:
+
+- 기본 branch가 `main`인 BearHomeBot Git 저장소를 구성했다.
+- `origin`은 `https://github.com/bshsqa/BearHomeBot.git`이다.
+- `k-skill`, `.runtime`, database, log, secret, Codex local state를 Git에서
+  제외했다.
+- TypeScript 애플리케이션, test, type check, build, formatting 기반을
+  추가했다.
+- `install.sh`, `start.sh`, `stop.sh`, `doctor.sh`를 추가했다.
+- 운영 상태를 Git checkout 밖의 XDG 경로에 두는 runtime path를 추가했다.
+
+남은 운영 준비:
+
+- clean Ubuntu 설치에서 Node.js 24 설치 경로를 확정한다.
+- rootless Podman을 설치하고 doctor 검사를 통과시킨다.
+- target mini PC에서 systemd, disk, timezone 검사를 다시 수행한다.
+
+완료 조건:
+
+- fresh clone에서 doctor와 install이 재현 가능하게 동작한다.
+- 일반적인 `git add .`로 runtime이나 secret이 stage되지 않는다.
+
+### Phase 2: Telegram 보안 전송 기반
+
+상태: bootstrap 완료
+
+구현 내용:
+
+- 외부 inbound port가 필요 없는 Telegram long polling client를 추가했다.
+- private text chat만 처리하고 group, channel, media를 무시한다.
+- `/whoami`로 숫자 user ID를 확인할 수 있다.
+- allowlist에 등록되지 않은 사용자의 일반 요청을 차단한다.
+- `/health`와 일반 text 수신 응답으로 실제 휴대폰 왕복을 검증했다.
+- token 설정 파일의 owner와 mode `0600`을 시작 전에 검사한다.
+- token이 API error, test output, Git에 노출되지 않도록 검사한다.
+- 이 네트워크의 IPv6 blackhole을 피하도록 Telegram Node process에
+  IPv4 우선 연결을 적용했다.
+
+현재 bootstrap 명령:
+
+```bash
+./scripts/configure-telegram.sh
+./scripts/allow-telegram-user.sh <numeric-user-id>
+npm run build
+./scripts/start-telegram.sh
+```
+
+Codex 연결 전에 유지할 동작:
+
+- `/whoami`, `/health`, `/start` 같은 gateway command는 Codex를 호출하지
+  않는다.
+- 승인된 일반 text만 Codex queue로 전달한다.
+- bot token은 Codex process environment에서 제거한다.
+
+운영 전 추가할 항목:
+
+- Telegram `update_id` checkpoint를 SQLite에 저장한다.
+- replay와 중복 update를 idempotency key로 차단한다.
+- request 크기와 사용자별 rate limit을 적용한다.
+- bootstrap allowlist를 SQLite principal model로 이전한다.
+- bot token을 systemd credential로 이전한다.
+
+완료 조건:
+
+- 미승인 사용자는 session이나 job을 생성할 수 없다.
+- Telegram update 재전송으로 동일 action이 두 번 실행되지 않는다.
+- bot token이 Codex와 worker에서 읽히지 않는다.
+
+### Phase 3: Telegram-Codex 대화 연결
+
+상태: 다음 구현 단계
+
+목표:
+
+승인된 사용자의 일반 Telegram 메시지를 Codex CLI에 전달하고, Codex의
+최종 답변을 같은 private chat으로 돌려준다. 이 단계는 대화와 session
+수명주기만 지원하며 `k-skill`과 사용자별 서비스 credential은 연결하지
+않는다.
+
+세션 모델:
+
+- Codex thread가 실제 대화 문맥과 transcript를 소유한다.
+- BearHomeBot SQLite는 전체 대화 원문을 복제하지 않는다.
+- SQLite에는 thread ID, 사용자 소유권, 표시 이름, 상태, 생성·최근 사용
+  시각, active association, turn 결과 metadata만 저장한다.
+- 한 사용자는 여러 session을 보유할 수 있지만 한 번에 하나만 active다.
+- Codex가 model 기본 임계값에 따라 자동 compaction을 수행하도록 두며,
+  BearHomeBot은 routine operation에서 수동 compaction을 요청하지 않는다.
+- session은 age, idle time, turn count를 기준으로 자동 만료하거나 삭제하지
+  않는다.
+- 사용자가 명시적으로 새 session을 만들고, 이전 session을 선택하고,
+  현재 session을 종료한다.
+
+작업:
+
+- `users`, `telegram_identities`, `codex_sessions`, `turns`,
+  `telegram_updates`, `audit_events` SQLite migration을 만든다.
+- 기존 bootstrap allowlist를 초기 admin principal로 안전하게 import한다.
+- 사용자별 여러 `codex_sessions`와 하나의 `active_session_id`를 저장한다.
+- active session에 thread ID가 없으면 첫 일반 메시지를
+  `codex exec --json`으로 시작하고
+  `thread.started.thread_id`를 저장한다.
+- active session의 다음 메시지는 저장된 정확한 ID로
+  `codex exec resume <session-id>`를 실행한다.
+- `/newsession [이름]`으로 새 session을 만들고 active로 선택한다. 이름을
+  생략하면 생성 시각을 이용한 기본 표시 이름을 사용한다.
+- `/sessions`는 현재 사용자가 소유한 session을 최근 사용 순으로
+  page 단위로 보여주고 active session을 구분한다.
+- `/sessions` 결과에 Telegram inline button을 붙여 session을 선택하게 한다.
+- Telegram polling이 `message`와 `callback_query` update를 받고, 각
+  callback query에 즉시 응답하도록 client와 type을 확장한다.
+- 지원 명령을 lowercase command 이름으로 Telegram bot menu에 등록한다.
+- callback data에는 Codex thread ID가 아닌 짧은 BearHomeBot 내부 ID만
+  넣는다.
+- callback을 처리할 때 Telegram 숫자 user ID와 session owner를 다시
+  검증한 뒤 active association을 원자적으로 변경한다.
+- `/renamesession [이름]`으로 현재 session의 표시 이름을 바꾼다.
+- `/endsession` 또는 `세션 종료해`는 현재 association만 비활성화하고
+  session과 Codex thread는 보존한다.
+- active session이 없는 상태에서 일반 메시지를 받으면 새 기본 session을
+  만든 뒤 해당 메시지로 Codex thread를 시작한다.
+- Codex process는 shell 없이 인자 배열로 spawn한다.
+- 사용자 text는 command-line argument 대신 stdin으로 전달한다.
+- 전용 Git workspace, 고정 working directory, 명시적 read-only sandbox,
+  timeout, output byte limit, cancellation signal을 적용한다.
+- 자동화용 고정 Codex configuration을 사용하고 개인 설정의 우발적 상속을
+  막는다.
+- child environment는 allowlist 방식으로 만들고 Telegram token과 모든
+  서비스 credential을 제외한다.
+- JSONL parser가 `thread.started`, final agent message, failure, usage만
+  구조화해서 처리하게 한다.
+- Codex 자동 compaction을 위한 model 기본값을 유지하고, 지원되는 JSONL
+  event가 있으면 compaction 발생 metadata만 기록한다.
+- 첫 버전에서는 세부 tool log를 Telegram에 보내지 않고, 처리 시작 알림과
+  최종 답변만 보낸다.
+- Telegram 길이 제한에 맞춰 최종 답변을 안전하게 분할한다.
+- 같은 사용자의 동시 turn을 막고, 전역 Codex 동시 실행 수를 2로 제한한다.
+- `/cancel`로 실행 중인 Codex child를 종료하고 상태를 기록한다.
+- Codex authentication과 quota 오류를 사용자용 메시지와 운영 log로
+  분리한다.
+
+안전한 첫 수직 기능:
+
+```text
+approved Telegram text
+        |
+        v
+authenticated user queue
+        |
+        v
+Codex exec/resume in read-only workspace
+        |
+        v
+allowlisted final response
+        |
+        v
+same Telegram private chat
+```
+
+완료 조건:
+
+- 휴대폰에서 보낸 일반 질문에 Ubuntu의 Codex CLI 답변이 돌아온다.
+- 같은 사용자의 두 번째 메시지가 같은 Codex session 문맥을 이어간다.
+- `/newsession`, `/sessions`, session 선택, `/renamesession`,
+  `/endsession`, `/cancel`이 명확하게 동작한다.
+- 새 session과 과거 session 사이를 오가며 각 thread의 문맥을 이어간다.
+- 재시작 후에도 active session과 session 목록을 복구하고 저장된 thread ID를
+  정확한 사용자에게만 resume한다.
+- 두 사용자가 서로의 session을 목록에서 보거나 선택하거나 resume할 수 없다.
+- BearHomeBot SQLite에 전체 사용자 prompt와 Codex 답변 원문이 저장되지
+  않는다.
+- session은 규칙으로 자동 삭제되지 않으며 긴 context는 Codex 자동
+  compaction으로 처리된다.
+- Codex process와 출력에서 Telegram token 및 서비스 credential을 찾을
+  수 없다.
+- timeout, malformed JSONL, process crash가 gateway 전체를 종료시키지 않는다.
+
+### Phase 4: 안전한 k-skill 공급망
+
+상태: Phase 3 완료 후 시작
+
+작업:
+
+- Git checkout 밖에 bare upstream mirror를 만든다.
+- 허용된 `origin/main`을 fetch하고 후보를 정확한 commit SHA로 해석한다.
+- remote URL 변경, 예상하지 않은 branch, submodule, path escape, oversized
+  file, non-fast-forward history를 기본 거부한다.
+- 후보를 commit SHA별 불변 release directory에 materialize한다.
+- active commit과 후보의 machine-readable change manifest를 생성한다.
+- lockfile을 검사하고 승인되지 않은 Git 또는 임의 URL dependency를 거부한다.
+- 격리된 build stage에서 lifecycle script 없이 dependency를 설치한다.
+- dependency advisory scan을 실행한다.
+- secret이 없는 container에서 `npm run ci`와 BearHomeBot contract test를
+  실행한다.
+- 문서화된 read-only 예외가 없는 candidate test에서는 network를 차단한다.
+- Codex에는 secret 없이 후보 diff와 manifest만 제공하고, read-only
+  sandbox와 JSON output schema로 security review를 수행한다.
+- deterministic gate 또는 high-risk review가 실패하면 후보를 거부한다.
+- SQLite transaction으로 active commit을 원자적으로 교체한다.
+- 최근 release를 최소 3개 보존하고 명시적 rollback을 지원한다.
+
+완료 조건:
+
+- updater가 어느 시점에 종료돼도 active release가 손상되지 않는다.
+- 실패하거나 불확실한 검사는 active release를 변경하지 않는다.
+- 결과에 candidate SHA, gate별 결과, redacted log가 남는다.
+- 실행 중인 job은 pinned release를 계속 사용하고 새 job만 새 release를
+  사용한다.
+
+### Phase 5: Secret Broker와 사용자별 credential
+
+상태: Phase 4 완료 후 시작
+
+작업:
+
+- normal state와 별도인 encrypted vault database를 만든다.
+- secret value마다 AES-256-GCM 또는 XChaCha20-Poly1305 같은 authenticated
+  encryption을 적용한다.
+- master key를 repository와 vault database 밖에 생성한다.
+- key versioning과 credential rotation을 지원한다.
+- dedicated service account가 vault와 master key를 소유하게 한다.
+- allowlisted typed operation만 받는 Unix domain socket API를 만든다.
+- caller와 trusted principal을 검증하고 model-generated user ID를 무시한다.
+- credential 이름과 존재 여부는 조회할 수 있지만 값은 반환하지 않는다.
+- `~/.config/k-skill/secrets.env`를 선택한 BearHomeBot user에게 import하는
+  local admin command를 만든다.
+- importer는 source owner와 mode `0600`을 검사하고 원본을 자동 삭제하지
+  않는다.
+- log, exception, child output, Telegram response에 대한 redaction test를
+  추가한다.
+
+완료 조건:
+
+- Codex worker account가 vault database, master key, decrypted value를 읽을
+  수 없다.
+- secret은 한 번의 승인된 operation을 위해 broker memory에서만 복호화된다.
+- normal state database나 일반 backup만 복사해서는 credential이 노출되지
+  않는다.
+- User A는 User B의 credential을 사용하거나 존재 여부를 조회할 수 없다.
+
+### Phase 6: Capability Broker와 첫 KTX 기능
+
+상태: Phase 5 완료 후 시작
+
+첫 credentialed capability는 KTX로 한다. KTX는 로그인, 검색, 예약,
+장기 monitoring, 알림, account lock을 함께 검증할 수 있다.
+
+작업:
+
+- pinned active release의 KTX skill만 읽는다.
+- 로그인 확인, 열차 검색, 좌석 확인, 예약 목록, 예약 생성, 예약 취소를
+  typed operation으로 정의한다.
+- Codex는 operation을 제안하고 BearHomeBot이 principal, policy,
+  confirmation을 검증한 뒤 실행한다.
+- 예약과 취소에는 idempotency key와 명시적 confirmation policy를 적용한다.
+- Secret Broker가 해당 사용자의 `KSKILL_KTX_ID`와
+  `KSKILL_KTX_PASSWORD`만 KTX helper child에 주입한다.
+- helper는 shell 없이 최소 environment와 pinned release로 실행한다.
+- 같은 Korail account를 사용하는 작업은 직렬화한다.
+- 결과를 structured job state에 저장하고 요청한 Telegram 사용자에게
+  알린다.
+
+완료 조건:
+
+- Codex는 Korail ID와 password를 받지 않는다.
+- 다른 사용자의 Korail account를 선택하거나 사용할 수 없다.
+- 동일 예약 요청이 재시도돼도 중복 예약되지 않는다.
+- 예약 결과에는 감사 가능한 stable operation ID가 남는다.
+
+### Phase 7: 영속 job과 동시 사용자 처리
+
+작업:
+
+- 사용자별 FIFO queue를 구현한다.
+- 전역 Codex worker limit을 기본 2로 설정한다.
+- provider별, account별 lock을 구현한다.
+- monitoring job, 중지 조건, 최대 실행 시간을 SQLite에 저장한다.
+- 각 job에 active `k-skill` release SHA를 pin한다.
+- restart 후 interrupted job을 보수적으로 복구한다.
+- backoff, jitter, rate policy, deadline을 적용한다.
+- 대화 turn과 장기 job의 worker pool을 분리한다.
+
+완료 조건:
+
+- 최대 5명이 session, credential, 결과가 섞이지 않은 상태로 요청할 수 있다.
+- 같은 사용자의 대화 순서가 보존된다.
+- 장기 job 중에도 status와 cancellation command가 동작한다.
+- restart recovery가 완료된 예약을 다시 실행하지 않는다.
+
+### Phase 8: 자동 업데이트와 운영 서비스
+
+작업:
+
+- gateway, Codex worker, Secret Broker, updater의 systemd service를 만든다.
+- 00:00 `Asia/Seoul`에 실행되는 systemd timer를 만든다.
+- 누락된 daily update를 다음 startup에 한 번 보충한다.
+- Telegram, Codex authentication, database migration, active release,
+  disk space, broker availability health check를 추가한다.
+- update, migration, credential operation, health check 실패를 admin에게
+  알린다.
+- update 결과와 active commit을 Telegram admin command로 조회하게 한다.
+- backup, restore, rollback 절차를 문서화하고 연습한다.
+
+완료 조건:
+
+- reboot 후 interactive terminal 없이 서비스가 시작된다.
+- nightly update 실패 시 이전 release가 계속 활성 상태다.
+- active commit 확인과 rollback이 한 명령으로 가능하다.
+- 서비스 장애 원인을 secret 노출 없이 진단할 수 있다.
+
+### Phase 9: 보안 강화와 첫 운영 release
+
+작업:
+
+- gateway, Codex worker, updater, Secret Broker를 별도 Unix account로
+  분리한다.
+- `NoNewPrivileges`, `ProtectSystem`, `PrivateTmp` 등 restrictive systemd
+  옵션과 최소 writable path를 적용한다.
+- production mini PC에 LUKS full-disk encryption을 적용한다.
+- hardware가 지원하면 vault master key를 TPM-backed systemd credential로
+  이전한다.
+- credentialed runner의 outbound network를 provider 목적지로 제한한다.
+- secret rotation, encrypted recovery export, restore drill을 추가한다.
+- clean Ubuntu installation test와 release checklist를 수행한다.
+
+완료 조건:
+
+- Telegram gateway 또는 Codex worker 하나가 침해돼도 vault 평문을 직접
+  읽을 수 없다.
+- Git repository, normal state database, 일반 backup에 평문 credential이
+  없다.
+- 두 번째 Ubuntu machine에서 문서화된 restore 절차가 재현된다.
+
+## 7. 비밀정보 저장 원칙
+
+### 7.1 현재 bootstrap 저장
+
+`~/.config/bearhomebot/telegram.env`는 Telegram 전송 기능을 검증하기 위한
+임시 저장소다. repository 밖에 있고 mode `0600`이며 BearHomeBot Telegram
+process만 읽는다.
+
+기존 `~/.config/k-skill/secrets.env`도 mode `0600`인 개인 수동 실행
+환경에서는 사용할 수 있다. 다중 사용자와 unattended operation을 지원하는
+BearHomeBot 운영 저장소로는 사용하지 않는다.
+
+### 7.2 암호화의 역할
+
+- LUKS full-disk encryption은 전원이 꺼진 PC나 분리된 disk의 도난을
+  방어한다.
+- application-level encryption은 vault database나 backup만 복사된 경우를
+  방어한다.
+- process와 Unix account 분리는 Codex와 일반 worker의 직접 접근을 막는다.
+- just-in-time injection은 평문이 존재하는 시간과 위치를 줄인다.
+
+암호화된 database와 key를 같은 owner, 같은 경로, 같은 권한으로 보관하면
+효과가 제한된다. vault, key, worker의 소유권을 분리해야 한다.
+
+### 7.3 credential 사용 흐름
+
+```text
+encrypted per-user vault
+          |
+          | trusted principal + validated operation
+          v
 Secret Broker decrypts in memory
-      |
-      | minimal child environment, direct exec, no shell
-      v
+          |
+          | minimal child environment, direct exec
+          v
 pinned k-skill helper
-      |
-      v
-redacted structured result returned to Codex and Telegram
+          |
+          v
+redacted structured result
+          |
+          +---- Codex receives only non-secret result
+          +---- Telegram receives user-facing result
 ```
 
-Codex must not perform the decryption and must not receive the plaintext value.
-Codex decides that an operation is needed; BearHomeBot validates the operation
-and principal; the Secret Broker performs the credentialed execution.
+Codex는 operation이 필요하다고 제안할 수 있지만 복호화하지 않는다.
+BearHomeBot이 principal과 policy를 검증하고 Secret Broker가 credential을
+사용하는 실행을 담당한다.
 
-Environment variables are retained only because current k-skill credentialed
-helpers expect them. They are injected into the helper child process, never the
-Codex process. Longer term, file descriptors or a narrow local API may replace
-environment variables where helpers support it.
+## 8. 구현 마일스톤
 
-### 7.4 Initial key-management level
+### Milestone 1: Telegram-Codex 대화
 
-For the first production-capable version:
+1. 승인 사용자가 Telegram으로 일반 text를 보낸다.
+2. Ubuntu PC의 Codex CLI가 active session의 thread를 시작하거나 resume한다.
+3. 최종 답변이 같은 Telegram private chat으로 돌아온다.
+4. 사용자가 여러 session을 만들고 목록에서 선택해 문맥을 전환한다.
+5. session 종료, 이름 변경, cancellation, restart resume가 동작한다.
+6. 긴 thread는 Codex 자동 compaction을 사용하고 session을 자동 삭제하지
+   않는다.
+7. Telegram token과 서비스 credential은 Codex에 전달되지 않는다.
 
-- Encrypt vault entries with authenticated encryption.
-- Keep the vault database under a dedicated service account.
-- Keep the master key out of the repository and out of the vault database.
-- Supply the key to the broker through a root-managed systemd credential or a
-  root-owned key file inaccessible to the Codex worker.
-- Recommend LUKS full-disk encryption on the target mini PC.
+### Milestone 2: 검증된 k-skill release
 
-After the target hardware is known:
+1. upstream candidate commit을 정확한 SHA로 가져온다.
+2. secret 없는 격리 환경에서 deterministic gate와 Codex review를 수행한다.
+3. 성공한 후보만 원자적으로 promote한다.
+4. active release 확인과 rollback이 가능하다.
 
-- Prefer TPM-backed systemd credentials for unattended startup.
-- Maintain a separately stored recovery method.
-- Treat recovery-key loss as potential credential loss and make re-entry of
-  external service credentials an acceptable fallback.
+### Milestone 3: 사용자별 KTX
 
-### 7.5 Migration from secrets.env
+1. 관리자가 사용자별 Korail credential을 encrypted vault에 import한다.
+2. Telegram 요청이 typed KTX operation으로 변환된다.
+3. Secret Broker가 Codex에 secret을 보여주지 않고 pinned helper를 실행한다.
+4. 검색, 예약, monitoring, cancellation 결과가 올바른 사용자에게 돌아간다.
 
-The migration command should:
+### Milestone 4: 상시 운영
 
-1. Verify that the source file is owned by the invoking user and has mode `0600`.
-2. Parse dotenv values without printing them.
-3. Ask which BearHomeBot user owns the credentials.
-4. Encrypt and write each supported value to the vault.
-5. Verify credential presence by name and optionally run a read-only login test.
-6. Leave the original file untouched.
-7. Tell the administrator how to archive or remove the original after manual
-   verification.
+1. 최대 5명의 요청을 queue와 lock으로 안전하게 처리한다.
+2. reboot 후 systemd가 서비스를 자동 시작한다.
+3. 매일 00:00 update와 missed-run catch-up이 동작한다.
+4. backup, restore, rollback, 장애 알림이 검증된다.
 
-Automatic deletion is intentionally excluded from the importer.
+## 9. 바로 다음 작업
 
-## 8. Current Bootstrap Batch
+다음 구현 batch는 Phase 3의 최소 수직 기능이다.
 
-The initial implementation batch contains:
+1. SQLite migration과 Telegram principal import를 만든다.
+2. 사용자별 다중 session repository와 active association을 구현한다.
+3. shell을 사용하지 않는 `CodexRunner`와 JSONL parser를 만든다.
+4. `/newsession`, `/sessions`, inline session 선택, `/renamesession`,
+   `/endsession`을 구현한다.
+5. 일반 Telegram text의 echo 응답을 active Codex thread의 최종 답변으로
+   교체한다.
+6. timeout, cancellation, token 격리, session 소유권, restart resume,
+   callback 위조 방지 test를 추가한다.
+7. 실제 휴대폰에서 연속 대화, 다중 session 생성, 전환, 복귀를 검증한다.
 
-- A real BearHomeBot Git repository.
-- A root `.gitignore` that excludes `k-skill`, `.runtime`, databases, secrets,
-  Codex state, and logs.
-- A minimal TypeScript application with tests.
-- `install.sh` and `doctor.sh` for Ubuntu.
-- A runtime path module that never stores production state in the checkout.
+이 batch에서는 `k-skill`, Korail credential, 예약 실행을 다루지 않는다.
+완료 후 Phase 4의 read-only upstream SHA 확인과 release model 구현으로
+이동한다.
 
-The next Phase 2 batch adds a `k-skill` release model containing upstream URL,
-commit SHA, status, and active flag, plus a read-only command that reports the
-latest upstream SHA without installing or promoting it.
+## 10. 참고 자료
 
-After the read-only upstream check, the next implementation batch builds the
-isolated candidate validation and atomic promotion path. The Secret Broker must
-be implemented before the first real KTX credential is imported.
-
-## 9. First Milestone
-
-Milestone 1 is complete when a clean Ubuntu machine can:
-
-1. Clone BearHomeBot.
-2. Run the installer and doctor.
-3. Fetch a candidate `k-skill` commit.
-4. Validate it without access to secrets.
-5. Promote or reject it atomically.
-6. Report the active commit and roll back to the previous commit.
-
-Telegram, Codex conversations, and KTX credentials begin only after this
-milestone is reliable.
-
-## 10. References
-
-- k-skill security policy:
-  `k-skill/docs/security-and-secrets.md`
+- k-skill security policy: `k-skill/docs/security-and-secrets.md`
 - Codex non-interactive mode:
   `https://learn.chatgpt.com/docs/non-interactive-mode`
+- Codex best practices and automatic compaction:
+  `https://learn.chatgpt.com/guides/best-practices`
+- Codex configuration reference:
+  `https://learn.chatgpt.com/docs/config-file/config-reference`
+- Codex sandbox:
+  `https://learn.chatgpt.com/docs/sandboxing`
+- Telegram bot commands:
+  `https://core.telegram.org/bots/api#botcommand`
+- Telegram inline keyboard:
+  `https://core.telegram.org/bots/api#inlinekeyboardbutton`
 - Ubuntu full-disk encryption:
   `https://documentation.ubuntu.com/security/security-features/storage/encryption-full-disk/`
-- Linux process environment visibility:
+- Linux process environment:
   `https://man7.org/linux/man-pages/man5/proc_pid_environ.5.html`

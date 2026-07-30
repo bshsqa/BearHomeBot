@@ -16,6 +16,7 @@
     "format:check": "prettier --check \"src/**/*.ts\" \"test/**/*.ts\" package.json \"tsconfig*.json\"",
     "lint": "tsc -p tsconfig.json --noEmit",
     "start": "node dist/main.js",
+    "start:telegram": "node dist/telegram-main.js",
     "test": "tsc -p tsconfig.test.json && node --test .runtime/test-dist/test/*.test.js"
   },
   "devDependencies": {
