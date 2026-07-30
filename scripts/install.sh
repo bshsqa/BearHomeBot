@@ -1,0 +1,13 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
+"$PROJECT_ROOT/scripts/doctor.sh"
+
+cd "$PROJECT_ROOT"
+npm ci
+npm run ci
+
+printf 'BearHomeBot bootstrap installed successfully.\n'
+printf 'Run %s/scripts/start.sh --health to verify the app.\n' "$PROJECT_ROOT"
