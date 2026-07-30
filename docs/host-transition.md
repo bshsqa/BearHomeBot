@@ -31,6 +31,26 @@ policy와 문서뿐이다. 다음 항목은 각 PC에서 새로 만든다.
 단계에서는 foreground process로 실행하고, Phase 8 이후에는 운영 미니
 PC의 systemd service가 이 역할을 고정해서 맡는다.
 
+현재 `scripts/start-telegram.sh`는 다음 구성요소를 하나의 통합 Node
+process로 시작한다.
+
+```text
+Telegram long polling
+  -> allowlist와 update deduplication
+  -> SQLite user, session, turn 상태
+  -> per-user queue
+  -> codex exec 또는 resume child process
+  -> Telegram 답장
+```
+
+별도의 Codex server process나 `scripts/start.sh`를 함께 실행하지 않는다.
+Codex CLI는 미리 로그인만 해두며 Telegram message가 도착할 때 통합
+process가 필요한 child process를 시작한다.
+
+systemd service가 구현되기 전에는 `start-telegram.sh`를 실행한 terminal을
+열어 둬야 한다. terminal 종료, `Ctrl+C`, logout 또는 reboot 후에는
+gateway를 수동으로 다시 실행한다.
+
 ### 운영 미니 PC
 
 검증된 Git commit을 새로 clone하고 local credential과 runtime을

@@ -78,6 +78,16 @@ npm run build
 ./scripts/start-telegram.sh
 ```
 
+`start-telegram.sh`는 현재 BearHomeBot의 통합 실행 진입점입니다. 하나의
+Node process가 Telegram long polling, allowlist 인증, SQLite, session과
+queue, Codex CLI 실행, Telegram 답장 전송을 모두 관리합니다. Codex는
+별도 daemon으로 실행하지 않고 메시지마다 child process로 호출합니다.
+`start.sh`를 추가로 실행할 필요도 없습니다.
+
+Phase 8의 systemd service가 구현되기 전까지 이 process는 foreground로
+실행됩니다. terminal을 닫거나 `Ctrl+C`를 누르거나 PC를 재부팅하면
+종료되며 자동으로 다시 시작되지 않습니다.
+
 3. 휴대폰에서 만든 봇에게 `/whoami`를 보내 숫자 사용자 ID를 확인합니다.
 4. 봇을 `Ctrl+C`로 멈추고 해당 ID를 로컬 allowlist에 추가합니다.
 
