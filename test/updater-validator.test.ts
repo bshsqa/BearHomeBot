@@ -28,7 +28,7 @@ test("runs acquisition with scripts disabled and CI without network", async () =
   const runner = async (options: CommandOptions): Promise<CommandResult> => {
     calls.push(options);
     if (calls.length === 1) {
-      return success(`${IMAGE_ID}\n`);
+      return success(`${IMAGE_ID.slice("sha256:".length)}\n`);
     }
     if (calls.length === 2) {
       mkdirSync(join(cache, "npm"), { recursive: true });
@@ -136,6 +136,28 @@ test("fails closed when the networkless validation process fails", async () => {
     await assert.rejects(
       validator.validate(candidate, cache),
       /validation failed/u,
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("rejects malformed validator image IDs", async () => {
+  const root = mkdtempSync(join(tmpdir(), "bearhomebot-validator-"));
+  const candidate = join(root, "candidate");
+  const cache = join(root, "cache");
+  mkdirSync(candidate);
+
+  try {
+    const validator = new PodmanCandidateValidator(
+      loadKSkillPolicy(POLICY_PATH),
+      {
+        runner: async () => success("not-an-image-id\n"),
+      },
+    );
+    await assert.rejects(
+      validator.validate(candidate, cache),
+      /invalid image ID/u,
     );
   } finally {
     rmSync(root, { recursive: true, force: true });

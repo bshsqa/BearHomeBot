@@ -339,7 +339,7 @@ same Telegram private chat
 
 ### Phase 4: 안전한 k-skill 공급망
 
-상태: 구현 완료, 대상 Ubuntu PC의 Podman 실검증 대기
+상태: 구현 완료, 대상 WSL2의 거부 경로 검증 완료, 승격 경로 재검증 대기
 
 구현 내용:
 
@@ -374,6 +374,15 @@ same Telegram private chat
   포함한 자동 test를 추가했다.
 - 실제 upstream fetch와 deterministic gate, 실제 Codex structured
   security review를 smoke test했다.
+- 대상 WSL2의 rootless Podman 4.9 image ID 형식을 지원하고 실제 upstream
+  fetch와 dependency acquisition을 실행했다. 2026-07-31 기준 후보는 high
+  npm audit finding 2건으로 거부했으며 active release는 비어 있는 상태를
+  유지했다.
+
+남은 실환경 검증:
+
+- upstream의 high npm audit finding이 해결된 후보에서 networkless CI,
+  Codex review, 불변 release 승격까지 같은 WSL2 host에서 확인한다.
 
 완료 조건:
 

@@ -167,7 +167,10 @@ export class PodmanCandidateValidator {
       "--format={{.Id}}",
       this.#policy.validation.image,
     ]);
-    const imageId = inspect.stdout.toString("utf8").trim();
+    const inspectedImageId = inspect.stdout.toString("utf8").trim();
+    const imageId = /^[0-9a-f]{64}$/u.test(inspectedImageId)
+      ? `sha256:${inspectedImageId}`
+      : inspectedImageId;
     if (!/^sha256:[0-9a-f]{64}$/u.test(imageId)) {
       throw new Error("Validator image returned an invalid image ID");
     }
