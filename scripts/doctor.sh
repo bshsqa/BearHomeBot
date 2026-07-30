@@ -112,6 +112,18 @@ check_commands() {
     fail "Git is not installed"
   fi
 
+  if version="$(command_version tar --version)"; then
+    pass "$version"
+  else
+    fail "GNU tar is not installed"
+  fi
+
+  if version="$(command_version flock --version)"; then
+    pass "$version"
+  else
+    fail "flock is not installed"
+  fi
+
   if version="$(command_version node --version)"; then
     node_version="${version#v}"
     node_major="${node_version%%.*}"

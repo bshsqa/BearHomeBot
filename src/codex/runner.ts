@@ -59,7 +59,10 @@ export class CodexRunnerError extends Error {
   }
 }
 
-function resolveExecutable(executable: string, env: NodeJS.ProcessEnv): string {
+export function resolveCodexExecutable(
+  executable: string,
+  env: NodeJS.ProcessEnv,
+): string {
   if (isAbsolute(executable)) {
     accessSync(executable, constants.X_OK);
     return realpathSync(executable);
@@ -81,7 +84,9 @@ function resolveExecutable(executable: string, env: NodeJS.ProcessEnv): string {
   throw new Error(`Codex executable was not found: ${executable}`);
 }
 
-function buildChildEnvironment(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+export function buildCodexChildEnvironment(
+  env: NodeJS.ProcessEnv,
+): NodeJS.ProcessEnv {
   const child: NodeJS.ProcessEnv = {
     HOME: env.HOME,
     PATH: env.PATH,
@@ -105,12 +110,16 @@ function buildChildEnvironment(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   return child;
 }
 
-function filesystemProfile(executablePath: string): string {
+export function codexFilesystemProfile(
+  executablePath: string,
+  additionalReadPaths: readonly string[] = [],
+): string {
   const entries = [
     `":root"="deny"`,
     `":minimal"="read"`,
     `":workspace_roots"={"."="read"}`,
     `${JSON.stringify(executablePath)}="read"`,
+    ...additionalReadPaths.map((path) => `${JSON.stringify(path)}="read"`),
   ];
   return `{${entries.join(",")}}`;
 }
@@ -125,7 +134,7 @@ export function prepareCodexWorkspace(
   }
 
   const result = spawnSync("git", ["init", "--quiet", workspace], {
-    env: buildChildEnvironment(env),
+    env: buildCodexChildEnvironment(env),
     encoding: "utf8",
   });
   if (result.status !== 0) {
@@ -144,12 +153,12 @@ export class CodexRunner {
   constructor(options: CodexRunnerOptions) {
     const sourceEnv = options.env ?? process.env;
     this.#workspace = realpathSync(options.workspace);
-    this.#executable = resolveExecutable(
+    this.#executable = resolveCodexExecutable(
       options.executable ?? "codex",
       sourceEnv,
     );
     this.#prefixArguments = options.executablePrefixArguments ?? [];
-    this.#env = buildChildEnvironment(sourceEnv);
+    this.#env = buildCodexChildEnvironment(sourceEnv);
     this.#timeoutMilliseconds =
       options.timeoutMilliseconds ?? DEFAULT_TIMEOUT_MILLISECONDS;
     this.#maxOutputBytes = options.maxOutputBytes ?? DEFAULT_MAX_OUTPUT_BYTES;
@@ -186,7 +195,7 @@ export class CodexRunner {
       "-c",
       'default_permissions="bearhomebot"',
       "-c",
-      `permissions.bearhomebot.filesystem=${filesystemProfile(this.#executable)}`,
+      `permissions.bearhomebot.filesystem=${codexFilesystemProfile(this.#executable)}`,
     ];
 
     if (threadId) {

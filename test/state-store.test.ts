@@ -1,4 +1,8 @@
 import assert from "node:assert/strict";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import test from "node:test";
 
 import { StateStore, StateStoreError } from "../src/state/store.js";
@@ -145,5 +149,103 @@ test("records turn metadata without requiring prompt or response text", () => {
     assert.equal(store.getActiveSession("1001")?.turnCount, 1);
   } finally {
     store.close();
+  }
+});
+
+test("promotes validated k-skill releases and rolls back atomically", () => {
+  const store = createStore();
+  const firstSha = "a".repeat(40);
+  const secondSha = "b".repeat(40);
+  try {
+    store.recordKSkillCandidate({
+      sha: firstSha,
+      treeSha: "1".repeat(40),
+      sourceUrl: "https://github.com/NomaDamas/k-skill.git",
+      sourceBranch: "main",
+      manifest: { candidate: 1 },
+    });
+    store.markKSkillCandidateValidated({
+      sha: firstSha,
+      releasePath: `/releases/${firstSha}`,
+      validation: { passed: true },
+      review: { status: "approved" },
+    });
+    store.promoteKSkillRelease(firstSha);
+
+    store.recordKSkillCandidate({
+      sha: secondSha,
+      treeSha: "2".repeat(40),
+      sourceUrl: "https://github.com/NomaDamas/k-skill.git",
+      sourceBranch: "main",
+      manifest: { candidate: 2 },
+    });
+    store.markKSkillCandidateValidated({
+      sha: secondSha,
+      releasePath: `/releases/${secondSha}`,
+      validation: { passed: true },
+      review: { status: "approved" },
+    });
+    store.promoteKSkillRelease(secondSha);
+
+    assert.deepEqual(store.getKSkillActiveState(), {
+      activeSha: secondSha,
+      previousSha: firstSha,
+      updatedAt: NOW,
+    });
+    assert.equal(store.getKSkillRelease(firstSha)?.status, "superseded");
+
+    const rolledBack = store.rollbackKSkillRelease();
+    assert.equal(rolledBack.sha, firstSha);
+    assert.equal(rolledBack.status, "active");
+    assert.deepEqual(store.getKSkillActiveState(), {
+      activeSha: firstSha,
+      previousSha: secondSha,
+      updatedAt: NOW,
+    });
+  } finally {
+    store.close();
+  }
+});
+
+test("records rejected k-skill candidates without release content", () => {
+  const store = createStore();
+  const sha = "c".repeat(40);
+  try {
+    store.recordKSkillCandidate({
+      sha,
+      treeSha: "3".repeat(40),
+      sourceUrl: "https://github.com/NomaDamas/k-skill.git",
+      sourceBranch: "main",
+      manifest: { deterministic: true },
+    });
+    const rejected = store.rejectKSkillCandidate(
+      sha,
+      "deterministic_gate_failed",
+    );
+
+    assert.equal(rejected.status, "rejected");
+    assert.equal(rejected.failureCode, "deterministic_gate_failed");
+    assert.equal(rejected.releasePath, undefined);
+  } finally {
+    store.close();
+  }
+});
+
+test("migrates an existing schema version 1 database to updater state", () => {
+  const root = mkdtempSync(join(tmpdir(), "bearhomebot-state-v1-"));
+  const path = join(root, "state.sqlite");
+  const database = new DatabaseSync(path);
+  database.exec("PRAGMA user_version = 1");
+  database.close();
+
+  try {
+    const store = new StateStore(path, () => NOW);
+    try {
+      assert.deepEqual(store.getKSkillActiveState(), {});
+    } finally {
+      store.close();
+    }
+  } finally {
+    rmSync(root, { recursive: true, force: true });
   }
 });

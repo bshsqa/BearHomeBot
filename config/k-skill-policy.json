@@ -1,0 +1,45 @@
+{
+  "schemaVersion": 1,
+  "upstream": {
+    "url": "https://github.com/NomaDamas/k-skill.git",
+    "branch": "main"
+  },
+  "limits": {
+    "maxFiles": 5000,
+    "maxBlobBytes": 5242880,
+    "maxTotalBytes": 52428800,
+    "maxPathBytes": 4096,
+    "maxSegmentBytes": 255
+  },
+  "dependencies": {
+    "npmRegistry": "https://registry.npmjs.org/",
+    "pythonIndex": "https://pypi.org/simple",
+    "pythonWheels": [
+      {
+        "name": "beautifulsoup4",
+        "version": "4.12.3"
+      },
+      {
+        "name": "soupsieve",
+        "version": "2.9.1"
+      }
+    ],
+    "auditLevel": "high"
+  },
+  "validation": {
+    "image": "localhost/bearhomebot-k-skill-validator:phase4",
+    "acquireTimeoutSeconds": 900,
+    "testTimeoutSeconds": 1200,
+    "cpus": 2,
+    "memory": "2g",
+    "pidsLimit": 512
+  },
+  "codexReview": {
+    "required": true,
+    "timeoutSeconds": 600,
+    "maxChangedPaths": 1000
+  },
+  "release": {
+    "minimumRetained": 3
+  }
+}

@@ -2,7 +2,7 @@ import { chmodSync, mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 
-const SCHEMA_VERSION = 1;
+const SCHEMA_VERSION = 2;
 const MAX_SESSION_NAME_LENGTH = 80;
 
 export type UserRole = "admin" | "member";
@@ -28,6 +28,32 @@ export interface CodexSession {
 export interface TurnUsage {
   inputTokens?: number;
   outputTokens?: number;
+}
+
+export type KSkillReleaseStatus =
+  "discovered" | "rejected" | "validated" | "active" | "superseded";
+
+export interface KSkillReleaseRecord {
+  sha: string;
+  treeSha: string;
+  sourceUrl: string;
+  sourceBranch: string;
+  status: KSkillReleaseStatus;
+  manifest?: unknown;
+  validation?: unknown;
+  review?: unknown;
+  releasePath?: string;
+  failureCode?: string;
+  discoveredAt: string;
+  validatedAt?: string;
+  activatedAt?: string;
+  updatedAt: string;
+}
+
+export interface KSkillActiveState {
+  activeSha?: string;
+  previousSha?: string;
+  updatedAt?: string;
 }
 
 export class StateStoreError extends Error {
@@ -64,6 +90,23 @@ interface SessionRow {
   turn_count: number;
 }
 
+interface KSkillReleaseRow {
+  sha: string;
+  tree_sha: string;
+  source_url: string;
+  source_branch: string;
+  status: KSkillReleaseStatus;
+  manifest_json: string | null;
+  validation_json: string | null;
+  review_json: string | null;
+  release_path: string | null;
+  failure_code: string | null;
+  discovered_at: string;
+  validated_at: string | null;
+  activated_at: string | null;
+  updated_at: string;
+}
+
 function rowToUser(row: UserRow): BearHomeUser {
   return {
     id: row.id,
@@ -87,6 +130,61 @@ function rowToSession(row: SessionRow): CodexSession {
     session.threadId = row.thread_id;
   }
   return session;
+}
+
+function parseStoredJson(value: string | null): unknown | undefined {
+  return value === null ? undefined : (JSON.parse(value) as unknown);
+}
+
+function rowToKSkillRelease(row: KSkillReleaseRow): KSkillReleaseRecord {
+  const release: KSkillReleaseRecord = {
+    sha: row.sha,
+    treeSha: row.tree_sha,
+    sourceUrl: row.source_url,
+    sourceBranch: row.source_branch,
+    status: row.status,
+    discoveredAt: row.discovered_at,
+    updatedAt: row.updated_at,
+  };
+  const manifest = parseStoredJson(row.manifest_json);
+  const validation = parseStoredJson(row.validation_json);
+  const review = parseStoredJson(row.review_json);
+  if (manifest !== undefined) {
+    release.manifest = manifest;
+  }
+  if (validation !== undefined) {
+    release.validation = validation;
+  }
+  if (review !== undefined) {
+    release.review = review;
+  }
+  if (row.release_path !== null) {
+    release.releasePath = row.release_path;
+  }
+  if (row.failure_code !== null) {
+    release.failureCode = row.failure_code;
+  }
+  if (row.validated_at !== null) {
+    release.validatedAt = row.validated_at;
+  }
+  if (row.activated_at !== null) {
+    release.activatedAt = row.activated_at;
+  }
+  return release;
+}
+
+function validateGitSha(sha: string): string {
+  if (!/^[0-9a-f]{40,64}$/u.test(sha)) {
+    throw new Error("k-skill SHA has an invalid format");
+  }
+  return sha;
+}
+
+function validateFailureCode(code: string): string {
+  if (!/^[a-z0-9_.-]{1,100}$/u.test(code)) {
+    throw new Error("k-skill failure code has an invalid format");
+  }
+  return code;
 }
 
 function normalizeSessionName(name: string): string {
@@ -413,6 +511,235 @@ export class StateStore {
       .run(status, this.#now(), updateId);
   }
 
+  recordKSkillCandidate(candidate: {
+    sha: string;
+    treeSha: string;
+    sourceUrl: string;
+    sourceBranch: string;
+    manifest: unknown;
+  }): KSkillReleaseRecord {
+    const sha = validateGitSha(candidate.sha);
+    const treeSha = validateGitSha(candidate.treeSha);
+    const now = this.#now();
+    this.#database
+      .prepare(
+        `INSERT INTO k_skill_releases (
+           sha, tree_sha, source_url, source_branch, status, manifest_json,
+           discovered_at, updated_at
+         ) VALUES (?, ?, ?, ?, 'discovered', ?, ?, ?)
+         ON CONFLICT(sha) DO UPDATE SET
+           tree_sha = excluded.tree_sha,
+           source_url = excluded.source_url,
+           source_branch = excluded.source_branch,
+           manifest_json = excluded.manifest_json,
+           status = CASE
+             WHEN k_skill_releases.status = 'active' THEN 'active'
+             ELSE 'discovered'
+           END,
+           failure_code = NULL,
+           updated_at = excluded.updated_at`,
+      )
+      .run(
+        sha,
+        treeSha,
+        candidate.sourceUrl,
+        candidate.sourceBranch,
+        JSON.stringify(candidate.manifest),
+        now,
+        now,
+      );
+    return this.#requireKSkillRelease(sha);
+  }
+
+  rejectKSkillCandidate(
+    sha: string,
+    failureCode: string,
+    review?: unknown,
+  ): KSkillReleaseRecord {
+    validateGitSha(sha);
+    validateFailureCode(failureCode);
+    const result = this.#database
+      .prepare(
+        `UPDATE k_skill_releases
+         SET status = 'rejected', failure_code = ?,
+             review_json = COALESCE(?, review_json), updated_at = ?
+         WHERE sha = ? AND status != 'active'`,
+      )
+      .run(
+        failureCode,
+        review === undefined ? null : JSON.stringify(review),
+        this.#now(),
+        sha,
+      );
+    if (result.changes !== 1) {
+      throw new Error("k-skill candidate could not be rejected");
+    }
+    return this.#requireKSkillRelease(sha);
+  }
+
+  markKSkillCandidateValidated(candidate: {
+    sha: string;
+    releasePath: string;
+    validation: unknown;
+    review: unknown;
+  }): KSkillReleaseRecord {
+    validateGitSha(candidate.sha);
+    const now = this.#now();
+    const result = this.#database
+      .prepare(
+        `UPDATE k_skill_releases
+         SET status = 'validated', release_path = ?, validation_json = ?,
+             review_json = ?, failure_code = NULL, validated_at = ?,
+             updated_at = ?
+         WHERE sha = ? AND status != 'active'`,
+      )
+      .run(
+        candidate.releasePath,
+        JSON.stringify(candidate.validation),
+        JSON.stringify(candidate.review),
+        now,
+        now,
+        candidate.sha,
+      );
+    if (result.changes !== 1) {
+      throw new Error("k-skill candidate could not be marked validated");
+    }
+    return this.#requireKSkillRelease(candidate.sha);
+  }
+
+  promoteKSkillRelease(sha: string): KSkillReleaseRecord {
+    validateGitSha(sha);
+    return this.#transaction(() => {
+      const candidate = this.#requireKSkillRelease(sha);
+      if (candidate.status !== "validated" && candidate.status !== "active") {
+        throw new Error("Only a validated k-skill release can be promoted");
+      }
+      if (!candidate.releasePath) {
+        throw new Error("Validated k-skill release has no release path");
+      }
+      const state = this.getKSkillActiveState();
+      if (state.activeSha === sha) {
+        return candidate;
+      }
+      const now = this.#now();
+      this.#database
+        .prepare(
+          `UPDATE k_skill_releases
+           SET status = 'superseded', updated_at = ?
+           WHERE status = 'active'`,
+        )
+        .run(now);
+      this.#database
+        .prepare(
+          `UPDATE k_skill_releases
+           SET status = 'active', activated_at = ?, updated_at = ?
+           WHERE sha = ?`,
+        )
+        .run(now, now, sha);
+      this.#database
+        .prepare(
+          `UPDATE k_skill_state
+           SET active_sha = ?, previous_sha = ?, updated_at = ?
+           WHERE id = 1`,
+        )
+        .run(sha, state.activeSha ?? null, now);
+      return this.#requireKSkillRelease(sha);
+    });
+  }
+
+  rollbackKSkillRelease(sha?: string): KSkillReleaseRecord {
+    return this.#transaction(() => {
+      const state = this.getKSkillActiveState();
+      const targetSha = validateGitSha(sha ?? state.previousSha ?? "");
+      if (targetSha === state.activeSha) {
+        return this.#requireKSkillRelease(targetSha);
+      }
+      const target = this.#requireKSkillRelease(targetSha);
+      if (
+        !target.releasePath ||
+        (target.status !== "validated" && target.status !== "superseded")
+      ) {
+        throw new Error("Rollback target is not a validated release");
+      }
+      const now = this.#now();
+      this.#database
+        .prepare(
+          `UPDATE k_skill_releases
+           SET status = 'superseded', updated_at = ?
+           WHERE status = 'active'`,
+        )
+        .run(now);
+      this.#database
+        .prepare(
+          `UPDATE k_skill_releases
+           SET status = 'active', activated_at = ?, updated_at = ?
+           WHERE sha = ?`,
+        )
+        .run(now, now, targetSha);
+      this.#database
+        .prepare(
+          `UPDATE k_skill_state
+           SET active_sha = ?, previous_sha = ?, updated_at = ?
+           WHERE id = 1`,
+        )
+        .run(targetSha, state.activeSha ?? null, now);
+      return this.#requireKSkillRelease(targetSha);
+    });
+  }
+
+  getKSkillRelease(sha: string): KSkillReleaseRecord | undefined {
+    validateGitSha(sha);
+    const row = this.#database
+      .prepare(
+        `SELECT sha, tree_sha, source_url, source_branch, status,
+                manifest_json, validation_json, review_json, release_path,
+                failure_code, discovered_at, validated_at, activated_at,
+                updated_at
+         FROM k_skill_releases
+         WHERE sha = ?`,
+      )
+      .get(sha) as KSkillReleaseRow | undefined;
+    return row ? rowToKSkillRelease(row) : undefined;
+  }
+
+  getKSkillActiveState(): KSkillActiveState {
+    const row = this.#database
+      .prepare(
+        `SELECT active_sha, previous_sha, updated_at
+         FROM k_skill_state WHERE id = 1`,
+      )
+      .get() as {
+      active_sha: string | null;
+      previous_sha: string | null;
+      updated_at: string | null;
+    };
+    const state: KSkillActiveState = {};
+    if (row.active_sha !== null) {
+      state.activeSha = row.active_sha;
+    }
+    if (row.previous_sha !== null) {
+      state.previousSha = row.previous_sha;
+    }
+    if (row.updated_at !== null) {
+      state.updatedAt = row.updated_at;
+    }
+    return state;
+  }
+
+  listKSkillReleases(): KSkillReleaseRecord[] {
+    const rows = this.#database
+      .prepare(
+        `SELECT sha, tree_sha, source_url, source_branch, status,
+                manifest_json, validation_json, review_json, release_path,
+                failure_code, discovered_at, validated_at, activated_at,
+                updated_at
+         FROM k_skill_releases
+         ORDER BY COALESCE(activated_at, validated_at, discovered_at) DESC`,
+      )
+      .all() as unknown as KSkillReleaseRow[];
+    return rows.map(rowToKSkillRelease);
+  }
+
   #migrate(): void {
     const version = (
       this.#database.prepare("PRAGMA user_version").get() as {
@@ -425,12 +752,9 @@ export class StateStore {
         `State database schema ${version} is newer than supported ${SCHEMA_VERSION}`,
       );
     }
-    if (version === SCHEMA_VERSION) {
-      return;
-    }
-
-    this.#transaction(() => {
-      this.#database.exec(`
+    if (version < 1) {
+      this.#transaction(() => {
+        this.#database.exec(`
         CREATE TABLE users (
           id INTEGER PRIMARY KEY,
           telegram_user_id TEXT NOT NULL UNIQUE,
@@ -485,9 +809,49 @@ export class StateStore {
           created_at TEXT NOT NULL
         );
 
-        PRAGMA user_version = 1;
       `);
-    });
+        this.#database.exec("PRAGMA user_version = 1");
+      });
+    }
+    if (version < 2) {
+      this.#transaction(() => {
+        this.#database.exec(`
+          CREATE TABLE k_skill_releases (
+            sha TEXT PRIMARY KEY,
+            tree_sha TEXT NOT NULL,
+            source_url TEXT NOT NULL,
+            source_branch TEXT NOT NULL,
+            status TEXT NOT NULL
+              CHECK (status IN (
+                'discovered', 'rejected', 'validated', 'active', 'superseded'
+              )),
+            manifest_json TEXT,
+            validation_json TEXT,
+            review_json TEXT,
+            release_path TEXT,
+            failure_code TEXT,
+            discovered_at TEXT NOT NULL,
+            validated_at TEXT,
+            activated_at TEXT,
+            updated_at TEXT NOT NULL
+          );
+
+          CREATE UNIQUE INDEX one_active_k_skill_release
+            ON k_skill_releases(status)
+            WHERE status = 'active';
+
+          CREATE TABLE k_skill_state (
+            id INTEGER PRIMARY KEY CHECK (id = 1),
+            active_sha TEXT REFERENCES k_skill_releases(sha),
+            previous_sha TEXT REFERENCES k_skill_releases(sha),
+            updated_at TEXT
+          );
+
+          INSERT INTO k_skill_state (id) VALUES (1);
+        `);
+        this.#database.exec("PRAGMA user_version = 2");
+      });
+    }
   }
 
   #upsertUser(telegramUserId: string, role: UserRole): BearHomeUser {
@@ -562,6 +926,14 @@ export class StateStore {
          VALUES (?, ?, ?, ?)`,
       )
       .run(userId, eventType, entityId, this.#now());
+  }
+
+  #requireKSkillRelease(sha: string): KSkillReleaseRecord {
+    const release = this.getKSkillRelease(sha);
+    if (!release) {
+      throw new Error("k-skill release was not found");
+    }
+    return release;
   }
 
   #transaction<T>(operation: () => T): T {

@@ -336,35 +336,53 @@ same Telegram private chat
 
 ### Phase 4: 안전한 k-skill 공급망
 
-상태: 다음 구현 단계
+상태: 구현 완료, 대상 Ubuntu PC의 Podman 실검증 대기
 
-작업:
+구현 내용:
 
-- Git checkout 밖에 bare upstream mirror를 만든다.
-- 허용된 `origin/main`을 fetch하고 후보를 정확한 commit SHA로 해석한다.
-- remote URL 변경, 예상하지 않은 branch, submodule, path escape, oversized
-  file, non-fast-forward history를 기본 거부한다.
-- 후보를 commit SHA별 불변 release directory에 materialize한다.
-- active commit과 후보의 machine-readable change manifest를 생성한다.
-- lockfile을 검사하고 승인되지 않은 Git 또는 임의 URL dependency를 거부한다.
-- 격리된 build stage에서 lifecycle script 없이 dependency를 설치한다.
-- dependency advisory scan을 실행한다.
-- secret이 없는 container에서 `npm run ci`와 BearHomeBot contract test를
-  실행한다.
-- 문서화된 read-only 예외가 없는 candidate test에서는 network를 차단한다.
-- Codex에는 secret 없이 후보 diff와 manifest만 제공하고, read-only
-  sandbox와 JSON output schema로 security review를 수행한다.
-- deterministic gate 또는 high-risk review가 실패하면 후보를 거부한다.
-- SQLite transaction으로 active commit을 원자적으로 교체한다.
-- 최근 release를 최소 3개 보존하고 명시적 rollback을 지원한다.
+- version-controlled policy에 정확한 upstream URL, branch, registry,
+  resource limit, review policy를 고정했다.
+- Git checkout 밖에 bare upstream mirror를 만들고 `origin/main`만 정확한
+  commit SHA로 fetch한다.
+- remote 변경, non-fast-forward history, submodule, symlink, path escape,
+  예약 path, 비정상 mode, 파일 수와 크기 초과를 checkout 전에 거부한다.
+- 모든 `package.json`, package-lock v3, Python requirements를 구조적으로
+  검사하고 Git, 임의 URL, file, link, custom registry dependency를
+  거부한다.
+- active commit과 후보의 machine-readable manifest를 만들고 SQLite에
+  candidate, validation, review, failure code, active pointer를 기록한다.
+- rootless Podman acquisition stage에서 lifecycle script 없이 dependency를
+  받고 high 이상 vulnerability를 실패 처리한다.
+- secret 없는 validation stage에 network `none`, read-only cache,
+  capability drop, no-new-privileges, CPU, memory, PID, timeout, output
+  limit을 적용하고 `npm run ci`를 실행한다.
+- Codex를 ephemeral one-shot, read-only filesystem, JSON schema,
+  user config/rules와 외부 tool 비활성화 조건으로 실행한다.
+- deterministic gate, container validation, Codex review가 실패하거나
+  불확실하면 candidate를 거부한다.
+- validation tree를 폐기하고 동일 Git SHA에서 fresh release를 다시
+  materialize해 digest를 기록하고 read-only로 만든다.
+- 검증된 release만 SQLite transaction으로 active 상태로 교체한다.
+- release를 자동 삭제하지 않아 최소 3개 보존 조건을 지키며, 직전 또는
+  지정 SHA로 rollback할 때 content digest를 다시 검증한다.
+- `flock`으로 updater 동시 실행을 막고 `check`, `update`, `status`,
+  `rollback` 운영 명령을 제공한다.
+- 악성 fixture, 전체 updater, 실패 시 active 보존, migration, rollback을
+  포함한 자동 test를 추가했다.
+- 실제 upstream fetch와 deterministic gate, 실제 Codex structured
+  security review를 smoke test했다.
 
 완료 조건:
 
 - updater가 어느 시점에 종료돼도 active release가 손상되지 않는다.
 - 실패하거나 불확실한 검사는 active release를 변경하지 않는다.
-- 결과에 candidate SHA, gate별 결과, redacted log가 남는다.
+- 결과에 candidate SHA, manifest, validation summary, structured review,
+  stable failure code가 남는다.
 - 실행 중인 job은 pinned release를 계속 사용하고 새 job만 새 release를
   사용한다.
+- target Ubuntu PC에서 validator image를 build하고 실제 upstream
+  acquisition, networkless CI, promotion 거부 또는 성공을 end-to-end로
+  확인한다.
 
 ### Phase 5: Secret Broker와 사용자별 credential
 
@@ -574,22 +592,23 @@ BearHomeBot이 principal과 policy를 검증하고 Secret Broker가 credential�
 
 ## 9. 바로 다음 작업
 
-다음 구현 batch는 Phase 4의 read-only 공급망 기반이다.
+다음 구현 batch는 Phase 5의 Secret Broker 기반이다.
 
-1. 허용 `k-skill` upstream URL과 branch를 version-controlled 설정으로
-   고정한다.
-2. Git checkout 밖에 bare mirror와 commit SHA별 release 경로를 만든다.
-3. fetch한 후보의 remote, branch, history, submodule, 경로, 파일 크기를
-   deterministic gate로 검사한다.
-4. 현재 active SHA, candidate SHA, gate 결과를 SQLite에 기록한다.
-5. secret과 network를 제공하지 않는 격리 환경에서 `npm run ci`와
-   BearHomeBot contract test를 실행한다.
-6. 모든 필수 gate를 통과한 후보만 원자적으로 active release로 승격하고
-   실패 시 기존 release를 유지한다.
-7. updater 단위 테스트와 실제 upstream read-only smoke test를 수행한다.
+1. credential scope와 typed secret identifier를 정의한다.
+2. normal state와 분리된 encrypted vault schema를 만든다.
+3. repository와 vault 밖에 master key를 생성하고 owner와 mode를
+   검증한다.
+4. Unix domain socket을 사용하는 최소 Secret Broker API를 구현한다.
+5. caller와 Telegram principal을 구조화된 값으로 검증하고 사용자 간
+   credential 접근을 차단한다.
+6. 기존 `~/.config/k-skill/secrets.env`를 선택한 사용자 vault로 가져오는
+   local admin importer를 구현한다.
+7. Codex, log, exception, Telegram 응답에 secret이 노출되지 않는
+   integration test를 추가한다.
 
-이 batch에서는 Korail credential과 예약 실행을 다루지 않는다. 검증된
-release 공급망이 완성된 뒤 Phase 5의 Secret Broker로 이동한다.
+이 batch에서는 아직 KTX 예약을 실행하지 않는다. encrypted vault와
+credential 사용 경계가 완성된 뒤 Phase 6에서 첫 typed KTX capability를
+연결한다.
 
 ## 10. 참고 자료
 

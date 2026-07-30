@@ -3,9 +3,10 @@
 BearHomeBot은 승인된 Telegram 사용자의 요청을 Codex CLI와 검증된
 `k-skill` 실행으로 연결하는 Ubuntu 기반 홈 자동화 서비스입니다.
 
-현재 Telegram과 Codex CLI의 다중 세션 대화가 연결되어 있습니다.
-`k-skill`과 사용자별 서비스 계정은 아직 연결하지 않았으며, 모든 런타임
-설정과 상태는 저장소 밖의 전용 경로를 사용합니다.
+현재 Telegram과 Codex CLI의 다중 세션 대화, 그리고 fail-closed
+`k-skill` 공급망 updater가 구현되어 있습니다. 사용자별 서비스 계정과
+credentialed capability는 아직 연결하지 않았으며, 모든 런타임 설정과
+상태는 저장소 밖의 전용 경로를 사용합니다.
 
 ## 기준 환경
 
@@ -136,9 +137,28 @@ Telegram bot token은 별도의 `0600` 로컬 파일에 보관하며 Codex
 
 ## k-skill
 
-`k-skill`은 BearHomeBot 저장소에 포함하지 않습니다. 이후 updater가
-지정된 업스트림 커밋을 별도 런타임 경로에 내려받아 검증하고, 통과한
-불변 release만 활성화합니다.
+`k-skill`은 BearHomeBot 저장소에 포함하지 않습니다. updater가 고정된
+업스트림의 `main`을 bare mirror로 가져온 뒤 정확한 commit SHA를 정적
+게이트, rootless Podman의 networkless CI, ephemeral Codex 보안 검토에
+통과시킵니다. 하나라도 실패하거나 불확실하면 기존 active release를
+그대로 유지합니다.
+
+`install.sh`가 validator 이미지를 빌드한 뒤 다음 명령을 사용할 수
+있습니다.
+
+```bash
+./scripts/k-skill-updater.sh check
+./scripts/k-skill-updater.sh update
+./scripts/k-skill-updater.sh status
+./scripts/k-skill-updater.sh rollback
+./scripts/k-skill-updater.sh rollback <검증된 commit SHA>
+```
+
+`check`는 fetch와 계산 가능한 정적 검사만 수행하며 후보 코드를 실행하지
+않습니다. `update`는 격리된 dependency 획득과 networkless CI, Codex
+검토, 불변 release 생성, SQLite active pointer 교체까지 수행합니다.
+동시에 두 updater가 실행되지 않도록 `flock`을 사용합니다.
 
 전체 구현 순서는 [Ubuntu 구현 계획](docs/implementation-plan.md)을
-참고합니다.
+참고합니다. updater의 경계와 운영 절차는
+[k-skill updater 운영 문서](docs/k-skill-updater.md)에 정리되어 있습니다.
