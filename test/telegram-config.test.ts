@@ -30,3 +30,22 @@ test("loads Telegram configuration without exposing the token", () => {
   assert.equal(config.pollTimeoutSeconds, 30);
   assert.equal(config.codexTimeoutMilliseconds, 120_000);
 });
+
+test("defaults Codex turns to a 30 minute timeout", () => {
+  const config = loadTelegramConfig({
+    BEARHOMEBOT_TELEGRAM_TOKEN: "123456:abcdefghijklmnopqrstuv",
+  });
+
+  assert.equal(config.codexTimeoutMilliseconds, 1_800_000);
+});
+
+test("rejects Codex turn timeouts longer than 30 minutes", () => {
+  assert.throws(
+    () =>
+      loadTelegramConfig({
+        BEARHOMEBOT_TELEGRAM_TOKEN: "123456:abcdefghijklmnopqrstuv",
+        BEARHOMEBOT_CODEX_TIMEOUT_SECONDS: "1801",
+      }),
+    /integer from 10 to 1800/,
+  );
+});

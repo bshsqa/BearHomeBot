@@ -50,15 +50,15 @@ export function loadTelegramConfig(
     );
   }
 
-  const codexTimeoutText = env.BEARHOMEBOT_CODEX_TIMEOUT_SECONDS ?? "300";
+  const codexTimeoutText = env.BEARHOMEBOT_CODEX_TIMEOUT_SECONDS ?? "1800";
   const codexTimeoutSeconds = Number.parseInt(codexTimeoutText, 10);
   if (
     !Number.isSafeInteger(codexTimeoutSeconds) ||
     codexTimeoutSeconds < 10 ||
-    codexTimeoutSeconds > 900
+    codexTimeoutSeconds > 1800
   ) {
     throw new Error(
-      "BEARHOMEBOT_CODEX_TIMEOUT_SECONDS must be an integer from 10 to 900",
+      "BEARHOMEBOT_CODEX_TIMEOUT_SECONDS must be an integer from 10 to 1800",
     );
   }
 

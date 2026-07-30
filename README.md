@@ -102,6 +102,10 @@ Phase 8의 systemd service가 구현되기 전까지 이 process는 foreground�
 세션이 없다면 `새 대화 YYYY-MM-DD HH:mm` 이름의 세션을 자동으로 만들며,
 이 세션도 `/sessions`에 보존됩니다.
 
+각 Codex turn의 제한 시간은 기본 30분입니다. 운영 환경에서
+`BEARHOMEBOT_CODEX_TIMEOUT_SECONDS`를 사용하면 10~1800초 범위로 더 짧게
+설정할 수 있습니다.
+
 지원하는 명령은 다음과 같습니다.
 
 ```text
