@@ -77,6 +77,43 @@ test("starts Codex with stdin and a secret-free environment", async () => {
   }
 });
 
+test("pins GPT-5.6 Sol with medium reasoning on the standard service tier", async () => {
+  const { root, runner } = fixture(`
+    process.stdout.write(JSON.stringify({
+      type: "thread.started",
+      thread_id: "${THREAD_ID}"
+    }) + "\\n");
+    process.stdout.write(JSON.stringify({
+      type: "item.completed",
+      item: {
+        type: "agent_message",
+        text: JSON.stringify(process.argv.slice(2))
+      }
+    }) + "\\n");
+    process.stdout.write(JSON.stringify({ type: "turn.completed" }) + "\\n");
+  `);
+
+  try {
+    const result = await runner.run({ prompt: "모델 확인" });
+    const arguments_ = JSON.parse(result.finalText) as string[];
+
+    assert.deepEqual(
+      arguments_.slice(
+        arguments_.indexOf("--model"),
+        arguments_.indexOf("--model") + 2,
+      ),
+      ["--model", "gpt-5.6-sol"],
+    );
+    assert.ok(arguments_.includes('model_reasoning_effort="medium"'));
+    assert.ok(
+      arguments_.every((argument) => !argument.includes("service_tier")),
+    );
+    assert.ok(arguments_.every((argument) => !argument.includes("fast_mode")));
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("resumes only a validated Codex thread ID", async () => {
   const { root, runner } = fixture(`
     const args = process.argv.slice(2);

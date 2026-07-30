@@ -70,20 +70,6 @@ function parseCommand(text: string): ParsedCommand | undefined {
   return command;
 }
 
-function isCapabilityCatalogRequest(text: string): boolean {
-  const normalized = text.toLowerCase().replace(/\s+/gu, " ").trim();
-  const mentionsKSkill =
-    /(?:\bk[\s-]*skills?\b|케이\s*스킬|사용 가능한 스킬|활성화된 스킬)/u.test(
-      normalized,
-    );
-  const asksForList =
-    /(?:목록|리스트|전체|전부|쭉|나열)/u.test(normalized) ||
-    /(?:뭐[^?!.]{0,30}(?:있|가능|할 수)|무엇|어떤\s+(?:기능|스킬)|무슨\s+(?:기능|스킬))/u.test(
-      normalized,
-    );
-  return mentionsKSkill && asksForList;
-}
-
 export function telegramUpdateSenderId(
   update: TelegramUpdate,
 ): string | undefined {
@@ -252,10 +238,6 @@ export function routeTelegramUpdate(
       text: "지원하지 않는 명령이야. /sessions에서 사용 가능한 대화를 확인해줘.",
     };
   }
-  if (isCapabilityCatalogRequest(message.text)) {
-    return { ...base, kind: "list_capabilities" };
-  }
-
   return {
     ...base,
     kind: "prompt",

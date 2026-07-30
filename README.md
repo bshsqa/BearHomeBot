@@ -121,15 +121,14 @@ Phase 8의 systemd service가 구현되기 전까지 이 process는 foreground�
 /whoami                  내 Telegram 숫자 사용자 ID 확인
 ```
 
-`/skills` 외에도 `너 가능한 kskill 뭐 있어?`, `k-skill 기능 리스트
-알려줘`처럼 자연어로 물을 수 있습니다. 이 응답은 Codex의 추측이 아니라
-현재 active release의 `enabledSkills`와 각 `SKILL.md` 설명으로 만듭니다.
-거부·보류된 스킬은 목록에 포함하지 않습니다.
+`/skills`는 현재 active release의 `enabledSkills`와 각 `SKILL.md`
+설명으로 원본 목록을 만들며 거부·보류된 스킬은 포함하지 않습니다.
+`너 가능한 kskill 뭐 있어?`처럼 자연어로 물으면 일반 Codex 대화로
+처리하되, 같은 활성 catalog를 참고자료로 제공해 질문 전체에 맞춰
+답하게 합니다.
 
-`KTX 스킬로 조회와 예약이 가능해?`처럼 특정 기능을 묻는 문장은 전체
-목록 요청으로 처리하지 않습니다. 관련 승인 스킬만 찾아 그 설명을 Codex
-문맥에 제공하므로, Codex는 스킬이 설명한 기능과 현재 실제 실행 연결
-여부를 구분해 답합니다.
+Telegram의 Codex turn은 `gpt-5.6-sol`, medium reasoning, Standard
+속도를 명시적으로 사용합니다.
 
 `/sessions`에서 `●`가 붙은 항목이 현재 세션입니다. 세션에서 나와도
 대화는 삭제되지 않으며 목록에서 다시 선택할 수 있습니다. 그룹, 채널,

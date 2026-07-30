@@ -85,18 +85,21 @@ test("routes allowed text to a Codex prompt", () => {
   });
 });
 
-test("routes natural-language and command capability catalog requests", () => {
+test("keeps natural-language skill questions with Codex and reserves /skills for the direct catalog", () => {
   for (const text of [
     "너 가능한 kskill 뭐 있어?",
     "k-skill로 할 수 있는 기능 리스트 알려줘",
     "사용 가능한 스킬 목록 보여줘",
-    "/skills",
   ]) {
     assert.equal(
       routeTelegramUpdate(privateMessage(text), new Set(["1001"]))?.kind,
-      "list_capabilities",
+      "prompt",
     );
   }
+  assert.equal(
+    routeTelegramUpdate(privateMessage("/skills"), new Set(["1001"]))?.kind,
+    "list_capabilities",
+  );
 });
 
 test("does not mistake a specific skill capability question for a full list", () => {

@@ -204,7 +204,7 @@ test("answers capability catalog questions without invoking Codex", async () => 
   });
   try {
     await context.controller.handleUpdate(
-      message(1, "너 가능한 kskill 뭐 있어?"),
+      message(1, "/skills"),
       context.allowed,
       context.service.signal,
     );
@@ -220,7 +220,7 @@ test("answers capability catalog questions without invoking Codex", async () => 
   }
 });
 
-test("gives Codex only the relevant skill context for a capability question", async () => {
+test("gives Codex the active catalog as reference for a natural-language skill question", async () => {
   const context = fixture();
   context.controller = new TelegramController({
     client: context.client,
@@ -253,9 +253,9 @@ test("gives Codex only the relevant skill context for a capability question", as
 
     assert.equal(context.runner.requests.length, 1);
     const prompt = context.runner.requests[0]?.prompt ?? "";
-    assert.match(prompt, /<reviewed_kskill_context>/u);
+    assert.match(prompt, /<active_kskill_catalog>/u);
     assert.match(prompt, /ktx-booking/u);
-    assert.doesNotMatch(prompt, /delivery-tracking/u);
+    assert.match(prompt, /delivery-tracking/u);
     assert.match(
       context.client.messages.at(-1)?.text ?? "",
       /ktx 조회와 예약이 가능해/u,

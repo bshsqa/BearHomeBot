@@ -17,6 +17,8 @@ import { CodexJsonlParser, type CodexUsage } from "./jsonl.js";
 
 const DEFAULT_TIMEOUT_MILLISECONDS = 5 * 60 * 1_000;
 const DEFAULT_MAX_OUTPUT_BYTES = 2 * 1024 * 1024;
+const DEFAULT_MODEL = "gpt-5.6-sol";
+const DEFAULT_REASONING_EFFORT = "medium";
 const MAX_PROMPT_LENGTH = 32_000;
 const THREAD_ID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/iu;
@@ -188,8 +190,12 @@ export class CodexRunner {
 
   #codexArguments(threadId: string | undefined): string[] {
     const commonConfiguration = [
+      "--model",
+      DEFAULT_MODEL,
       "--ignore-user-config",
       "--strict-config",
+      "-c",
+      `model_reasoning_effort=${JSON.stringify(DEFAULT_REASONING_EFFORT)}`,
       "-c",
       'approval_policy="never"',
       "-c",

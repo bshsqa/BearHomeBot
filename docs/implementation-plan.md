@@ -314,11 +314,13 @@ npm run build
   timeout, output byte limit, cancellation signal을 적용한다.
 - 자동화용 고정 Codex configuration을 사용하고 개인 설정의 우발적 상속을
   막는다.
+- Telegram Codex turn은 `gpt-5.6-sol`, medium reasoning, Standard
+  service tier로 고정한다.
 - child environment는 allowlist 방식으로 만들고 Telegram token과 모든
   서비스 credential을 제외한다.
 - JSONL parser가 `thread.started`, final agent message, failure, usage만
   구조화해서 처리하게 한다.
-- Codex 자동 compaction을 위한 model 기본값을 유지하고 BearHomeBot은
+- Codex 자동 compaction을 위한 model 임계값을 따르고 BearHomeBot은
   transcript 원문을 별도로 복제하지 않는다.
 - 첫 버전에서는 세부 tool log를 Telegram에 보내지 않고, 처리 시작 알림과
   최종 답변만 보낸다.
@@ -548,9 +550,9 @@ Telegram 대화다. KTX는 로그인, 검색, 예약, 확인 정책을 함께 �
   release의 `enabledSkills`와 검토된 `SKILL.md` frontmatter를 직접 읽어
   분야별 목록으로 응답한다. Codex 추측이나 대화 session을 사용하지 않고
   제외된 스킬은 노출하지 않는다.
-- 특정 스킬의 가능 여부를 묻는 문장은 전체 목록으로 가로채지 않는다.
-  질문과 관련된 승인 스킬을 최대 5개로 좁혀 설명만 Codex 문맥에 넣고,
-  스킬이 기술한 기능과 현재 실제 실행 연결 여부를 구분해 답하게 한다.
+- 자연어 k-skill 질문은 별도 목록 규칙으로 가로채지 않는다. 활성
+  catalog를 참고자료로 Codex에 제공하고 질문 전체에 맞춰 답하게 한다.
+  `/skills`만 model 호출 없이 원본 목록을 반환한다.
 - Codex가 Telegram 자연어 요청에 맞는 스킬과 action을 제안하게 하되,
   active release의 `enabledSkills` 안에서만 선택하게 한다.
 - Capability Broker가 trusted principal, pinned release SHA, 승인 스킬
