@@ -459,6 +459,8 @@ same Telegram private chat
 - restart 후 interrupted job을 보수적으로 복구한다.
 - backoff, jitter, rate policy, deadline을 적용한다.
 - 대화 turn과 장기 job의 worker pool을 분리한다.
+- 완료 응답 앞에 `[세션 이름]`을 붙여 active session을 바꾼 뒤에도 결과가
+  어느 session에 속하는지 명확하게 표시한다.
 
 완료 조건:
 
