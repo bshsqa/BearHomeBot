@@ -4,52 +4,23 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
-import type { CandidateManifest } from "../src/updater/gates.js";
 import { loadKSkillPolicy } from "../src/updater/policy.js";
 import { CodexCandidateReviewer } from "../src/updater/reviewer.js";
+import type { SkillReviewScope } from "../src/updater/skills.js";
 
 const POLICY_PATH = join(process.cwd(), "config", "k-skill-policy.json");
 
-function manifest(): CandidateManifest {
+function scope(): SkillReviewScope {
   return {
-    schemaVersion: 1,
-    source: {
-      url: "https://github.com/NomaDamas/k-skill.git",
-      branch: "main",
-      sha: "a".repeat(40),
-      treeSha: "b".repeat(40),
-    },
-    tree: {
-      fileCount: 2,
-      totalBytes: 100,
-      maximumBlobBytes: 60,
-      executableFiles: 0,
-      packageJsonFiles: 1,
-    },
-    dependencies: {
-      workspacePackages: 0,
-      lockedNodeModules: 0,
-      localWorkspaceLinks: 0,
-      registryArtifacts: 0,
-      entriesWithoutIntegrity: 0,
-      entriesWithInstallScripts: 0,
-      pythonRequirementFiles: 0,
-    },
-    changes: {
-      count: 1,
-      paths: ["package.json"],
-      truncated: false,
-    },
-    deterministicGates: {
-      status: "passed",
-      checkedAt: "2026-07-30T10:00:00.000Z",
-    },
+    skillId: "example",
+    contentDigest: "a".repeat(64),
+    files: ["example/SKILL.md", "example/run.py"],
   };
 }
 
 function fakeReviewer(
   root: string,
-  review: Record<string, unknown>,
+  reviews: Array<Record<string, unknown>>,
 ): CodexCandidateReviewer {
   const script = join(root, "fake-codex.mjs");
   writeFileSync(
@@ -61,7 +32,6 @@ function fakeReviewer(
         process.env.BEARHOMEBOT_TELEGRAM_TOKEN ||
         process.env.KSKILL_KTX_PASSWORD
       );
-      const review = ${JSON.stringify(review)};
       const disabled = new Set();
       for (let index = 0; index < process.argv.length - 1; index += 1) {
         if (process.argv[index] === "--disable") {
@@ -75,16 +45,25 @@ function fakeReviewer(
         ["apps", "browser_use", "computer_use", "hooks", "memories",
          "multi_agent", "plugins", "workspace_dependencies"]
           .every((feature) => disabled.has(feature));
-      if (leaked || !isolated) review.status = "rejected";
+      const reviews = ${JSON.stringify(reviews)};
+      if (leaked || !isolated || !prompt.includes("privacy risk")) {
+        reviews[0].status = "rejected";
+      }
       process.stdout.write(JSON.stringify({
         type: "thread.started",
         thread_id: "0199a213-81c0-7800-8aa1-bbab2a035a53"
       }) + "\\n");
       process.stdout.write(JSON.stringify({
         type: "item.completed",
-        item: { type: "agent_message", text: JSON.stringify(review) }
+        item: {
+          type: "agent_message",
+          text: JSON.stringify({ reviews })
+        }
       }) + "\\n");
-      process.stdout.write(JSON.stringify({ type: "turn.completed" }) + "\\n");
+      process.stdout.write(JSON.stringify({
+        type: "turn.completed",
+        usage: { input_tokens: 50, output_tokens: 10 }
+      }) + "\\n");
     `,
     { mode: 0o700 },
   );
@@ -105,49 +84,63 @@ function fakeReviewer(
   );
 }
 
-test("parses a schema-shaped one-shot Codex approval without secret access", async () => {
+function review(
+  overrides: Record<string, unknown> = {},
+): Record<string, unknown> {
+  return {
+    skillId: "example",
+    contentDigest: "a".repeat(64),
+    status: "approved",
+    summary: "Behavior matches the documented purpose.",
+    dataAccess: ["user-provided search term"],
+    networkDestinations: ["https://example.test"],
+    findings: [],
+    ...overrides,
+  };
+}
+
+test("returns a schema-shaped behavior review without secret access", async () => {
   const root = mkdtempSync(join(tmpdir(), "bearhomebot-reviewer-"));
   const candidate = join(root, "candidate");
-  mkdirSync(candidate);
-  writeFileSync(join(candidate, "package.json"), "{}");
+  mkdirSync(join(candidate, "example"), { recursive: true });
+  writeFileSync(join(candidate, "example", "SKILL.md"), "# Example\n");
 
   try {
-    const reviewer = fakeReviewer(root, {
-      status: "approved",
-      summary: "No material risk found.",
-      findings: [],
-    });
-    const result = await reviewer.review(candidate, manifest());
+    const reviewer = fakeReviewer(root, [review()]);
+    const result = await reviewer.review(candidate, [scope()]);
 
-    assert.equal(result.status, "approved");
-    assert.equal(result.findings.length, 0);
+    assert.equal(result.reviews[0]?.status, "approved");
+    assert.deepEqual(result.reviews[0]?.dataAccess, [
+      "user-provided search term",
+    ]);
+    assert.equal(result.usage?.inputTokens, 50);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
 });
 
-test("fails closed when Codex approves a high-severity finding", async () => {
+test("rejects approval that contains a high-severity behavior finding", async () => {
   const root = mkdtempSync(join(tmpdir(), "bearhomebot-reviewer-"));
   const candidate = join(root, "candidate");
-  mkdirSync(candidate);
+  mkdirSync(join(candidate, "example"), { recursive: true });
 
   try {
-    const reviewer = fakeReviewer(root, {
-      status: "approved",
-      summary: "Conflicting result.",
-      findings: [
-        {
-          severity: "high",
-          title: "Unsafe command",
-          path: "script.js",
-          rationale: "Runs an unsafe command.",
-        },
-      ],
-    });
-    const result = await reviewer.review(candidate, manifest());
+    const reviewer = fakeReviewer(root, [
+      review({
+        findings: [
+          {
+            severity: "high",
+            title: "Secret exfiltration",
+            path: "example/run.py",
+            rationale: "Sends an environment secret to an unrelated host.",
+          },
+        ],
+      }),
+    ]);
+    const result = await reviewer.review(candidate, [scope()]);
 
-    assert.equal(result.status, "rejected");
-    assert.match(result.summary, /fail-closed/u);
+    assert.equal(result.reviews[0]?.status, "rejected");
+    assert.match(result.reviews[0]?.summary ?? "", /High-severity/u);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

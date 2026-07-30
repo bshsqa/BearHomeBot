@@ -5,16 +5,15 @@
 - 버전 관리와 review를 거친 BearHomeBot 코드와 정책
 - Telegram Bot API가 제공한 private chat의 숫자 `user_id`
 - 로컬 관리자가 등록한 allowlist
-- 설치 시 빌드하고 실행 시 image ID를 기록한 validator image
-- 모든 gate를 통과해 content digest가 고정된 active `k-skill` release
+- 로딩 안전 조건과 스킬별 동작 검토를 통과해 content digest가 고정된
+  active `k-skill` release
 
 ## 신뢰하지 않는 것
 
 - Telegram 메시지 내용과 username
 - Codex가 생성한 자연어, 명령, 사용자 ID, credential 이름
 - 새 `k-skill` commit의 코드, 문서, test, package metadata
-- dependency registry 응답과 runtime network 응답
-- validation 중 후보가 생성하거나 수정한 파일
+- 스킬 문서가 설명하는 외부 서비스와 runtime network 응답
 
 ## 주요 경계
 
@@ -27,9 +26,17 @@ environment, 전용 workspace, read-only permission profile로 실행된다.
 SQLite는 thread ID와 turn metadata만 저장하며 prompt와 답변 원문을
 복제하지 않는다.
 
-`k-skill` candidate는 secret 없는 rootless container에서만 test한다.
-candidate가 작성한 validation tree는 폐기하며, active release는 검증된
-동일 Git SHA에서 새로 만든다. 모든 오류와 불확실성은 fail-closed다.
+`k-skill` updater는 후보 코드와 test를 실행하지 않는다. exact Git SHA의
+path, mode, symlink, submodule, 크기만 계산 가능한 로딩 조건으로 확인하고,
+스킬별 SKILL.md와 연결된 구현 파일은 secret 없는 ephemeral Codex가
+read-only로 읽어 개인정보 접근·외부 전송·credential 요구·명령 실행
+동작을 검토한다. 모든 오류와 불확실성은 fail-closed다.
+
+스킬 동작 검토 결과는 `skill ID + content digest + review policy version`으로
+저장한다. 첫 baseline에서는 전체 스킬을 검토하고, 이후에는 새 스킬 또는
+동작 범위의 내용 해시가 바뀐 스킬만 다시 검토한다. 변경되지 않은 승인
+결과와 거부 결과를 모두 재사용하므로 같은 후보를 nightly update가 반복해도
+LLM 검토를 반복하지 않는다.
 
 서비스 credential은 normal state와 분리된 encrypted vault에 저장한다.
 각 값은 AES-256-GCM으로 principal과 credential/version metadata에
@@ -43,7 +50,7 @@ credentialed operation에서도 Codex가 secret 평문을 보거나 복호화하
 
 현재 구현은 저장소 오염, 사용자 간 session 혼합, 단순 prompt replay,
 candidate path escape, submodule과 symlink, 비정상 history, 과도한 tree,
-임의 dependency source, candidate test의 network 접근, 실패한 release의
+개인정보·credential의 숨은 외부 전송, 후보 코드 실행, 실패한 release의
 승격을 방어한다.
 
 다음 항목은 운영 host 단계에서 추가로 필요하다.

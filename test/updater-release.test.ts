@@ -18,6 +18,10 @@ import { inspectCandidate } from "../src/updater/gates.js";
 import { KSkillGitMirror } from "../src/updater/git.js";
 import { loadKSkillPolicy, type KSkillPolicy } from "../src/updater/policy.js";
 import { KSkillReleaseManager } from "../src/updater/release.js";
+import {
+  buildReviewedCandidateManifest,
+  discoverSkillReviewScopes,
+} from "../src/updater/skills.js";
 
 const POLICY_PATH = join(process.cwd(), "config", "k-skill-policy.json");
 
@@ -52,7 +56,7 @@ test("materializes a fresh immutable release and detects later mutation", async 
   const source = join(root, "source");
   const mirrorPath = join(root, "mirror.git");
   const releaseRoot = join(root, "releases");
-  const validationRoot = join(root, "validation");
+  const candidateRoot = join(root, "review-candidates");
   mkdirSync(source);
   git(root, "init", "--bare", "--quiet", remote);
   git(source, "init", "--quiet");
@@ -72,6 +76,8 @@ test("materializes a fresh immutable release and detects later mutation", async 
     }),
   );
   writeFileSync(join(source, "README.md"), "trusted source\n");
+  mkdirSync(join(source, "example"));
+  writeFileSync(join(source, "example", "SKILL.md"), "# Example\n");
   git(source, "add", "-A");
   git(source, "commit", "--quiet", "-m", "initial");
   git(source, "branch", "-M", "main");
@@ -86,7 +92,7 @@ test("materializes a fresh immutable release and detects later mutation", async 
   const mirror = new KSkillGitMirror(mirrorPath, policy, {
     allowFileProtocolForTests: true,
   });
-  const manager = new KSkillReleaseManager(releaseRoot, validationRoot, {
+  const manager = new KSkillReleaseManager(releaseRoot, candidateRoot, {
     now: () => new Date("2026-07-30T10:00:00.000Z"),
   });
   let releasePath: string | undefined;
@@ -99,37 +105,44 @@ test("materializes a fresh immutable release and detects later mutation", async 
       undefined,
       policy,
     );
-    const validationPath = await manager.createValidationDirectory(
-      mirror,
-      candidate,
-    );
+    const reviewPath = await manager.createReviewDirectory(mirror, candidate);
     assert.equal(
-      readFileSync(join(validationPath, "README.md"), "utf8"),
+      readFileSync(join(reviewPath, "README.md"), "utf8"),
       "trusted source\n",
     );
-    writeFileSync(join(validationPath, "README.md"), "validation mutation\n");
-    manager.removeValidationDirectory(validationPath);
+    const scopes = discoverSkillReviewScopes(reviewPath);
+    const reviewedManifest = buildReviewedCandidateManifest(
+      manifest,
+      scopes,
+      undefined,
+      1,
+    );
+    writeFileSync(join(reviewPath, "README.md"), "review mutation\n");
+    manager.removeReviewDirectory(reviewPath);
 
     const release = await manager.finalizeRelease(
       mirror,
       candidate,
-      manifest,
-      {
-        imageId: `sha256:${"a".repeat(64)}`,
-        artifactDigest: "b".repeat(64),
-        audit: {
-          info: 0,
-          low: 0,
-          moderate: 0,
-          high: 0,
-          critical: 0,
-          total: 0,
-        },
-      },
+      reviewedManifest,
       {
         status: "approved",
         summary: "Approved.",
-        findings: [],
+        policyVersion: 1,
+        totalSkills: 1,
+        reviewedSkills: ["example"],
+        reusedSkills: [],
+        skills: [
+          {
+            skillId: "example",
+            contentDigest: scopes[0]!.contentDigest,
+            status: "approved",
+            summary: "Approved.",
+            dataAccess: [],
+            networkDestinations: [],
+            findings: [],
+            source: "reviewed",
+          },
+        ],
       },
     );
     releasePath = release.path;

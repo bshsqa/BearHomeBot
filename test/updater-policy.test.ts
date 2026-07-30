@@ -14,7 +14,8 @@ test("loads the version-controlled k-skill trust policy", () => {
   assert.equal(policy.upstream.url, "https://github.com/NomaDamas/k-skill.git");
   assert.equal(policy.upstream.branch, "main");
   assert.equal(policy.limits.maxBlobBytes, 5 * 1024 * 1024);
-  assert.equal(policy.validation.image.includes("@latest"), false);
+  assert.equal(policy.behaviorReview.policyVersion, 1);
+  assert.equal(policy.behaviorReview.batchSize, 8);
 });
 
 test("rejects unknown fields and credentialed upstream URLs", () => {

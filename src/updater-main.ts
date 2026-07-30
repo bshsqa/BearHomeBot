@@ -10,7 +10,6 @@ import { defaultKSkillPolicyPath, loadKSkillPolicy } from "./updater/policy.js";
 import { KSkillReleaseManager } from "./updater/release.js";
 import { CodexCandidateReviewer } from "./updater/reviewer.js";
 import { KSkillUpdater } from "./updater/updater.js";
-import { PodmanCandidateValidator } from "./updater/validator.js";
 
 process.umask(0o077);
 
@@ -71,14 +70,13 @@ try {
     const mirror = new KSkillGitMirror(paths.kSkillMirror, policy);
     const releaseManager = new KSkillReleaseManager(
       paths.releaseRoot,
-      paths.kSkillValidationRoot,
+      paths.kSkillCandidateRoot,
     );
     const baseOptions = {
       policy,
       store,
       mirror,
       releaseManager,
-      cacheRoot: paths.kSkillCache,
     };
     if (command === "check") {
       const updater = new KSkillUpdater(baseOptions);
@@ -93,7 +91,6 @@ try {
     } else {
       const updater = new KSkillUpdater({
         ...baseOptions,
-        validator: new PodmanCandidateValidator(policy),
         reviewer: new CodexCandidateReviewer(
           policy,
           paths.kSkillReviewWorkspace,

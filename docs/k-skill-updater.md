@@ -1,143 +1,176 @@
-# k-skill 공급망과 운영
+# k-skill 로딩과 증분 동작 검토
 
 ## 목적
 
-BearHomeBot은 `k-skill` 저장소를 신뢰된 실행물로 바로 사용하지 않는다.
-고정된 upstream에서 후보 commit을 가져오고, 계산 가능한 검사와 격리
-실행, Codex 의미 검토를 모두 통과한 commit만 SHA별 불변 release로
-활성화한다.
+BearHomeBot은 `k-skill`을 저장소 전체의 일반적인 소프트웨어 품질로
+평가하지 않는다. 핵심 승인 기준은 각 스킬이 설명한 목적대로 동작하고,
+사용자의 개인정보·credential·파일·메시지·환경정보를 숨기거나 불필요하게
+외부로 전송하지 않는지다.
 
-버전 관리되는 정책은 `config/k-skill-policy.json`에 있다. upstream URL,
-branch, 크기 제한, registry, Python wheel, validator resource limit,
-Codex review 정책을 바꾸려면 BearHomeBot 코드 변경과 동일한 review를
-거쳐야 한다.
+updater는 후보 코드, test, package script 또는 installer를 실행하지 않는다.
+`npm audit`, dependency 다운로드, 후보 전체 CI, Podman validator는 이
+로딩 경로에 포함하지 않는다.
 
 ## 실행 단계
 
-1. 정책에 고정된 `origin/main`만 bare mirror에 fetch한다.
-2. candidate commit과 tree를 정확한 SHA로 해석하고 Git object
-   connectivity를 검사한다.
+1. 정책에 고정된 upstream `main`을 bare mirror에 fetch한다.
+2. candidate commit과 tree를 정확한 SHA로 해석하고 Git object 연결성을
+   확인한다.
 3. active SHA가 있으면 candidate가 그 descendant인지 확인한다.
-4. checkout 전에 NUL-delimited Git tree를 읽어 경로, mode, submodule,
-   symlink, 파일 수와 크기, review 가능한 변경 경로 수를 검사한다.
-5. 모든 `package.json`, lockfile v3, Python requirement source를
-   구조적으로 검사하고 임의 URL, Git, file, link dependency를 거부한다.
-6. fresh validation directory를 만들고 rootless Podman에서 dependency를
-   lifecycle script 없이 획득하며 `npm audit --audit-level=high`를
-   실행한다.
-7. 동일 컨테이너 이미지를 network `none`, cache read-only, candidate
-   source writable 조건으로 다시 실행해 `npm run ci`를 수행한다.
-8. Codex를 ephemeral one-shot, read-only filesystem, JSON output schema,
-   user config/rules 비활성화 조건으로 실행해 의미 기반 보안 검토를 한다.
-9. validation 작업공간을 폐기하고 Git object에서 새 release를 다시
-   materialize한다.
-10. release content digest와 검증 metadata를 기록하고 read-only로 만든
-    뒤 SQLite transaction으로 active SHA를 교체한다.
+4. checkout 전에 path escape, reserved path, symlink, submodule, 비정상
+   file mode, 파일 수와 크기 제한을 확인한다.
+5. 후보를 임시 read-only 검토 대상으로 materialize하고 top-level
+   `*/SKILL.md`를 스킬 목록으로 찾는다.
+6. 각 스킬에 다음 파일을 묶어 content digest를 계산한다.
+   - 해당 스킬 directory 전체
+   - 같은 이름의 `packages/<skill-id>` local package
+   - 그 package가 의존하는 다른 local workspace package
+   - `SKILL.md`가 명시적으로 참조한 repository 내부 helper
+7. SQLite에서 같은 `skill ID + content digest + review policy version`의
+   기존 결과를 찾는다.
+8. cache가 없는 스킬만 정책의 batch 크기로 ephemeral Codex에 전달한다.
+9. 모든 현재 스킬이 approved인 경우에만 동일 Git SHA에서 fresh release를
+   만들고 active pointer를 원자적으로 교체한다.
 
-Codex 검토는 deterministic gate를 우회하거나 성공으로 바꿀 수 없다.
-`rejected`, `uncertain`, malformed output, timeout, CLI 오류는 모두
-promotion 실패다. high 또는 critical finding이 있는데 Codex가
-`approved`를 반환해도 BearHomeBot이 `rejected`로 바꾼다.
+## 최초 검토와 nightly 증분 검토
 
-## 격리 경계
+- active release와 review cache가 없는 최초 update는 전체 스킬을 검토한다.
+- upstream SHA가 active SHA와 같으면 Codex를 호출하지 않는다.
+- 새 commit이 있어도 스킬 content digest가 모두 같으면 Codex를 호출하지
+  않고 기존 approved 결과를 재사용한다.
+- 새 스킬 또는 content digest가 달라진 스킬만 다시 검토한다.
+- 삭제된 스킬은 더 이상 실행 대상이 아니므로 LLM 검토 대상이 아니다.
+- 한 후보가 거부되더라도 그 전에 완료된 스킬별 결과는 cache에 남는다.
+  다음 patch에서는 같은 내용을 다시 검토하지 않는다.
+- rejected 또는 uncertain digest도 cache한다. 같은 내용을 매일 재검토하지
+  않으며, 내용 수정 또는 `behaviorReview.policyVersion` 증가가 있어야 새
+  검토가 수행된다.
 
-Dependency 획득 stage에는 registry network가 있지만 후보 script를
-실행하지 않는다. npm lifecycle script는 비활성화되고 Python package는
-정책에 고정된 이름과 버전만 binary wheel로 내려받는다. 전이 의존성도
-정책에 직접 열거하며 sdist build와 자동 dependency resolution을
-허용하지 않는다.
+검토 정책 자체가 바뀌어 전체 재검토가 필요하면
+`config/k-skill-policy.json`의 `behaviorReview.policyVersion`을 올린다.
 
-Validation stage는 다음 경계를 사용한다.
+## LLM 동작 검토 기준
+
+Codex는 각 스킬의 `SKILL.md`와 계산된 구현 범위만 읽고 다음을 구조화해
+반환한다.
+
+- 읽는 사용자·로컬 데이터
+- 요구하는 credential
+- 접속하는 외부 destination
+- 외부로 보내는 데이터
+- command, browser 또는 local helper 실행 동작
+
+다음은 거부한다.
+
+- 목적에 필요하지 않거나 숨겨진 개인정보·credential·cookie·token·파일
+  전송
+- 사용자나 모델에게 secret 노출을 요구하는 지시
+- arbitrary remote code/download 실행
+- 숨은 telemetry 또는 secret logging
+- Secret Broker와 typed operation 경계 우회
+- 설명한 목적과 실질적으로 다른 동작
+- 파괴적이거나 되돌리기 어려운 숨은 action
+
+명시한 서비스에 목적 수행에 필요한 최소 데이터만 보내는 정상적인 요청은
+그 사실이 드러나 있고 비례적이면 승인할 수 있다. 증거가 부족하면
+`uncertain`으로 처리하며 candidate는 승격하지 않는다.
+
+## Codex 격리
+
+검토 Codex는 다음 조건으로 실행한다.
 
 ```text
-rootless Podman
-network=none
-read-only root filesystem
-all Linux capabilities dropped
-no-new-privileges
-bounded CPU, memory, PID, time, output
-secret-free explicit environment
-dependency cache read-only
+ephemeral one-shot
+candidate read-only
+dedicated review workspace
+no candidate execution
+no network/browser/app/plugin/hook/memory/multi-agent tools
+no Telegram token or service credential
+strict JSON output schema
+bounded time and output
 ```
 
-후보 test가 source tree를 변경할 수 있으므로 validation directory 자체는
-승격하지 않는다. 승격 대상은 동일 SHA의 Git object에서 새로 만든 별도
-release이며 content digest를 다시 확인한다.
+candidate 안의 `AGENTS.md`, `CLAUDE.md`, `SKILL.md`와 모든 자연어는
+untrusted data다. 검토 prompt는 그 안의 지시를 따르지 않도록 명시한다.
 
-Codex review에는 Telegram token, 서비스 credential, candidate 실행 권한,
-network tool, app, plugin, hook, browser, memory, multi-agent 기능을
-제공하지 않는다. Codex 인증은 CLI 자체가 사용하지만 model tool의
-filesystem profile에는 candidate read 권한과 전용 review workspace만
-포함된다.
+## 남겨 두는 로딩 안전 조건
+
+다음 검사는 스킬 품질 평가가 아니라 후보를 안전하게 읽고 불변 release로
+만들기 위한 최소 조건이므로 유지한다.
+
+- exact upstream URL, branch, commit SHA
+- fast-forward history
+- Git object connectivity
+- path escape와 reserved metadata 차단
+- symlink와 submodule 차단
+- regular/executable file mode만 허용
+- file count, single-file size, total tree size 제한
+- release content digest와 read-only permission
+- atomic active pointer와 rollback digest 확인
+
+## 제거한 검사
+
+다음은 k-skill 로딩 승인 기준에서 제거했으며 관련 validator 코드와 설치
+요구사항도 함께 삭제했다.
+
+- npm dependency acquisition
+- `npm audit` vulnerability hard gate
+- package-lock과 dependency source 정책 검사
+- Python wheel 사전 다운로드
+- 후보 전체 `npm run ci`
+- rootless Podman validator image와 cache
+- changed-path 개수에 따른 후보 거부
+
+라이브러리 취약점이나 upstream test 품질은 필요할 때 별도의 진단 정보로
+확인할 수 있지만, 스킬이 개인정보를 부당하게 옮기는지에 대한 동작 승인과
+섞지 않는다.
 
 ## 명령
 
-먼저 환경과 validator image를 준비한다.
-
-```bash
-./scripts/doctor.sh
-./scripts/install.sh
-```
-
-현재 upstream을 실행 없이 검사한다.
+현재 upstream을 실행 없이 로딩 안전 조건만 확인한다.
 
 ```bash
 ./scripts/k-skill-updater.sh check
 ```
 
-모든 gate를 수행하고 통과한 candidate를 활성화한다.
+필요한 스킬 동작 검토를 수행하고 승인된 candidate를 활성화한다.
 
 ```bash
 ./scripts/k-skill-updater.sh update
 ```
 
-현재 active SHA와 candidate 이력을 확인한다.
+현재 active SHA와 candidate 이력을 확인하거나 rollback한다.
 
 ```bash
 ./scripts/k-skill-updater.sh status
-```
-
-직전 active release 또는 지정한 검증 release로 되돌린다.
-
-```bash
 ./scripts/k-skill-updater.sh rollback
 ./scripts/k-skill-updater.sh rollback <commit-sha>
 ```
 
-rollback도 저장된 release의 content digest가 일치하지 않으면 실패한다.
-release는 자동 삭제하지 않으므로 정책의 최소 3개 보존 조건보다 적게
-남기지 않는다. 정리 정책은 disk quota와 실행 중 job의 pinned SHA를
-함께 추적할 수 있을 때 추가한다.
-
 ## 상태 경로
-
-기본 경로는 다음과 같다.
 
 ```text
 ~/.local/share/bearhomebot/state.sqlite
 ~/.local/share/bearhomebot/k-skill/mirror.git
-~/.local/share/bearhomebot/k-skill/releases/<sha>
-~/.local/share/bearhomebot/k-skill/validation/
+~/.local/share/bearhomebot/k-skill/review-candidates/
 ~/.local/share/bearhomebot/k-skill/review-workspace/
-~/.cache/bearhomebot/k-skill/<sha>/
+~/.local/share/bearhomebot/k-skill/releases/<sha>
 ```
 
-`BEARHOMEBOT_DATA_DIR`, `BEARHOMEBOT_CACHE_DIR`,
-`BEARHOMEBOT_CONFIG_DIR`는 절대 경로로 재정의할 수 있다. updater lock은
-data directory 아래 `k-skill/update.lock`이다.
+review candidate directory는 검토 후 폐기한다. 스킬별 review cache와 release
+metadata는 SQLite에 남는다.
 
 ## 실패 처리
 
-- fetch나 Git object 검증 실패: candidate를 실행하지 않는다.
-- deterministic gate 실패: candidate를 `rejected`로 기록한다.
-- image, acquisition, audit, networkless CI 실패: candidate를
-  `rejected`로 기록한다.
-- Codex가 거부하거나 확신하지 못함: review와 함께 `rejected`로 기록한다.
-- release materialization 또는 digest 검증 실패: active pointer를
-  변경하지 않는다.
-- promotion transaction 실패: 기존 active release를 유지한다.
+- fetch나 로딩 안전 조건 실패: candidate를 실행하거나 검토하지 않는다.
+- Codex가 `rejected` 또는 `uncertain`을 반환: 해당 digest 결과를 저장하고
+  candidate를 승격하지 않는다.
+- Codex timeout, malformed output 또는 CLI 오류: candidate를 승격하지
+  않는다.
+- release 생성, digest 검증 또는 promotion transaction 실패: 기존 active
+  release를 유지한다.
 - 동시 updater 실행: `flock --nonblock`이 두 번째 실행을 거부한다.
 
-실패 상세 stdout/stderr는 사용자 응답이나 SQLite에 복제하지 않는다.
-SQLite에는 stable failure code, SHA, manifest, validation summary,
-structured review만 저장한다.
+상세 stdout/stderr, prompt, candidate 파일 내용과 credential은 SQLite나
+사용자 응답에 복제하지 않는다. SHA, skill digest, structured review,
+token usage와 stable failure code만 남긴다.

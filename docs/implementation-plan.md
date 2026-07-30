@@ -41,7 +41,7 @@ Codex CLI가 요청을 해석하고, 검증된 `k-skill`과 사용자별 계정�
 - credential이 필요한 작업은 BearHomeBot이 검증한 typed operation으로만
   Capability Broker에 요청한다.
 - 검증되지 않은 `k-skill` 후보에는 secret을 제공하지 않는다.
-- deterministic gate가 하나라도 실패하면 Codex 검토 결과와 관계없이
+- 로딩 안전 조건이 하나라도 실패하면 Codex 검토 결과와 관계없이
   후보를 활성화하지 않는다.
 - shell 문자열 조합 대신 인자 배열을 사용해 child process를 직접 실행한다.
 - 로그와 사용자 응답에는 중앙 redaction 정책을 적용한다.
@@ -82,7 +82,7 @@ Policy and Capability Broker
 Nightly Updater
        |
        v
-k-skill candidate -> deterministic gates -> isolated tests -> Codex review
+k-skill candidate -> loader safety -> changed-skill behavior review
        |
        v
 atomic promotion or active release unchanged
@@ -99,7 +99,6 @@ Telegram gateway, Codex runner, updater, capability runner, secret broker는
 - 서비스 관리: systemd
 - 로그: journald와 애플리케이션 수준 redaction
 - Telegram 연결: long polling
-- 후보 코드 격리: rootless Podman 또는 동등한 rootless OCI runtime
 - Codex 연동: `codex exec --json`과 명시적인 sandbox 설정
 - 비밀정보 저장: 인증 암호화를 적용한 별도 vault
 - 운영 시간대: `Asia/Seoul`
@@ -202,7 +201,6 @@ root가 관리하는 systemd credential 또는 동등한 전용 secret 경로에
 남은 운영 준비:
 
 - clean Ubuntu 설치에서 Node.js 24 설치 경로를 확정한다.
-- rootless Podman을 설치하고 doctor 검사를 통과시킨다.
 - target mini PC에서 systemd, disk, timezone 검사를 다시 수행한다.
 
 완료 조건:
@@ -360,64 +358,87 @@ same Telegram private chat
   수 없다.
 - timeout, malformed JSONL, process crash가 gateway 전체를 종료시키지 않는다.
 
-### Phase 4: 안전한 k-skill 공급망
+### Phase 4: k-skill 로딩과 증분 동작 검토
 
-상태: 구현 완료, 대상 WSL2의 거부 경로 검증 완료, 승격 경로 재검증 대기
+상태: 구조 변경 구현 완료, 최초 전체 behavior baseline 실환경 검토 대기
+
+목적:
+
+- 일반적인 library 취약점이나 upstream 전체 CI 결과가 아니라, 각 스킬이
+  설명한 목적대로 동작하는지와 개인정보·credential·파일을 숨기거나
+  불필요하게 외부로 전송하는지를 핵심 승인 기준으로 삼는다.
+- 최초 한 번은 전체 스킬을 검토하고 이후 nightly update에서는 추가되거나
+  동작 범위가 변경된 스킬만 LLM으로 검토한다.
+- 동일한 스킬 내용을 반복 검토하지 않아 token 사용을 변경량에 비례시킨다.
 
 구현 내용:
 
-- version-controlled policy에 정확한 upstream URL, branch, registry,
-  resource limit, review policy를 고정했다.
-- Git checkout 밖에 bare upstream mirror를 만들고 `origin/main`만 정확한
-  commit SHA로 fetch한다.
-- remote 변경, non-fast-forward history, submodule, symlink, path escape,
-  예약 path, 비정상 mode, 파일 수와 크기 초과를 checkout 전에 거부한다.
-- 모든 `package.json`, package-lock v3, Python requirements를 구조적으로
-  검사하고 Git, 임의 URL, file, link, custom registry dependency를
+- version-controlled policy에 exact upstream URL, branch, tree resource
+  limit과 behavior review policy version, timeout, batch size를 고정했다.
+- Git checkout 밖에 bare upstream mirror를 만들고 `origin/main`의 exact
+  commit SHA만 fetch한다.
+- non-fast-forward history, submodule, symlink, path escape, 예약 path,
+  비정상 mode, 파일 수와 크기 초과를 materialize 전에 거부한다.
+- top-level `*/SKILL.md`를 실제 스킬 목록으로 사용한다.
+- 스킬 directory, 같은 이름의 local package, transitive local workspace
+  package, `SKILL.md`가 명시적으로 참조한 repository helper를 하나의
+  behavior scope로 묶어 content digest를 계산한다.
+- SQLite에 `skill ID + content digest + review policy version`별 structured
+  review를 저장한다.
+- active release와 cache가 없는 최초 update는 전체 behavior scope를
+  검토한다.
+- upstream SHA가 active와 같으면 LLM을 호출하지 않는다. 새 commit이어도
+  모든 scope digest가 같으면 기존 결과만 재사용한다.
+- patch가 있는 경우 cache가 없는 새 스킬과 digest가 바뀐 스킬만 batch로
+  검토한다.
+- rejected와 uncertain 결과도 cache해 같은 내용을 nightly job이 반복
+  검토하지 않는다. 정책 자체를 바꾸면 policy version을 올려 전체 결과를
+  무효화한다.
+- Codex prompt는 각 스킬의 data access, credential 요구, network
+  destination, 전송 data, command/browser/helper 동작을 명시적으로
+  분류하게 한다.
+- 숨은 개인정보·secret 전송, secret 입력 유도, arbitrary remote code,
+  telemetry, secret logging, broker 우회, 목적과 다른 동작, 파괴적 action을
   거부한다.
-- active commit과 후보의 machine-readable manifest를 만들고 SQLite에
-  candidate, validation, review, failure code, active pointer를 기록한다.
-- rootless Podman acquisition stage에서 lifecycle script 없이 dependency를
-  받고 high 이상 vulnerability를 실패 처리한다.
-- secret 없는 validation stage에 network `none`, read-only cache,
-  capability drop, no-new-privileges, CPU, memory, PID, timeout, output
-  limit을 적용하고 `npm run ci`를 실행한다.
-- Codex를 ephemeral one-shot, read-only filesystem, JSON schema,
-  user config/rules와 외부 tool 비활성화 조건으로 실행한다.
-- deterministic gate, container validation, Codex review가 실패하거나
-  불확실하면 candidate를 거부한다.
-- validation tree를 폐기하고 동일 Git SHA에서 fresh release를 다시
-  materialize해 digest를 기록하고 read-only로 만든다.
-- 검증된 release만 SQLite transaction으로 active 상태로 교체한다.
-- release를 자동 삭제하지 않아 최소 3개 보존 조건을 지키며, 직전 또는
-  지정 SHA로 rollback할 때 content digest를 다시 검증한다.
+- Codex를 ephemeral one-shot, candidate read-only, strict JSON schema,
+  user config/rules와 network/browser/app/plugin/hook/memory/multi-agent
+  기능 비활성화 조건으로 실행한다.
+- candidate 코드, test, package script와 installer는 updater가 실행하지
+  않는다.
+- 모든 현재 스킬이 approved인 경우에만 동일 Git SHA에서 fresh release를
+  만들고 content digest를 기록한 뒤 read-only로 만든다.
+- 검토된 release만 SQLite transaction으로 active 상태로 교체하고 rollback
+  시 content digest를 다시 검증한다.
 - `flock`으로 updater 동시 실행을 막고 `check`, `update`, `status`,
   `rollback` 운영 명령을 제공한다.
-- 악성 fixture, 전체 updater, 실패 시 active 보존, migration, rollback을
-  포함한 자동 test를 추가했다.
-- 실제 upstream fetch와 deterministic gate, 실제 Codex structured
-  security review를 smoke test했다.
-- 대상 WSL2의 rootless Podman 4.9 image ID 형식을 지원하고 실제 upstream
-  fetch와 dependency acquisition을 실행했다. 2026-07-31 기준 후보는 high
-  npm audit finding 2건으로 거부했으며 active release는 비어 있는 상태를
-  유지했다.
 
-남은 실환경 검증:
+제거한 기존 검사와 구성:
 
-- upstream의 high npm audit finding이 해결된 후보에서 networkless CI,
-  Codex review, 불변 release 승격까지 같은 WSL2 host에서 확인한다.
+- npm dependency acquisition과 `npm audit` hard gate
+- package-lock, dependency source와 Python wheel 정책 검사
+- 후보 전체 `npm run ci`
+- rootless Podman validator image, build script, cache와 doctor 요구사항
+- changed-path 개수에 따른 후보 전체 거부
 
 완료 조건:
 
-- updater가 어느 시점에 종료돼도 active release가 손상되지 않는다.
-- 실패하거나 불확실한 검사는 active release를 변경하지 않는다.
-- 결과에 candidate SHA, manifest, validation summary, structured review,
-  stable failure code가 남는다.
-- 실행 중인 job은 pinned release를 계속 사용하고 새 job만 새 release를
-  사용한다.
-- target Ubuntu PC에서 validator image를 build하고 실제 upstream
-  acquisition, networkless CI, promotion 거부 또는 성공을 end-to-end로
-  확인한다.
+- 최초 candidate에서는 모든 top-level 스킬이 behavior review 대상이다.
+- 같은 SHA를 다시 확인하면 LLM token을 사용하지 않는다.
+- root 문서만 변경된 commit에서는 기존 스킬 review를 모두 재사용한다.
+- 스킬 하나의 문서·helper·연결된 local package가 바뀌면 그 스킬만 다시
+  검토한다.
+- 한 candidate가 거부돼도 이미 완료된 다른 스킬 review는 다음 patch에서
+  재사용한다.
+- 실패하거나 불확실한 review는 active release를 변경하지 않는다.
+- 결과에 candidate SHA, skill digest, policy version, structured review,
+  token usage와 stable failure code가 남는다.
+
+남은 실환경 검증:
+
+- 현재 active release가 비어 있으므로 실제 upstream 전체 스킬에 대한 최초
+  behavior baseline을 한 번 수행한다.
+- baseline 승인 후 같은 SHA nightly no-op과, 작은 upstream patch에서
+  changed-skill-only review를 실제 Codex CLI로 확인한다.
 
 ### Phase 5: Secret Broker와 사용자별 credential
 
@@ -641,7 +662,7 @@ BearHomeBot이 principal과 policy를 검증하고 Secret Broker가 credential�
 ### Milestone 2: 검증된 k-skill release
 
 1. upstream candidate commit을 정확한 SHA로 가져온다.
-2. secret 없는 격리 환경에서 deterministic gate와 Codex review를 수행한다.
+2. 최소 로딩 안전 조건과 스킬별 개인정보·위험 동작 review를 수행한다.
 3. 성공한 후보만 원자적으로 promote한다.
 4. active release 확인과 rollback이 가능하다.
 
@@ -674,9 +695,10 @@ BearHomeBot이 principal과 policy를 검증하고 Secret Broker가 credential�
 5. helper output을 structured result로 검증하고 secret을 redaction한 뒤
    Codex와 Telegram에는 비밀값 없는 결과만 전달한다.
 
-현재 upstream 후보가 high vulnerability로 거부되어 active `k-skill`
-release가 비어 있으므로, Phase 6은 안전한 후보가 승격되기 전까지 실제
-예약을 실행하지 않고 fixture 기반 통합 test로 먼저 진행한다.
+현재 active `k-skill` release가 비어 있고 새 동작 검토 정책의 최초 전체
+baseline이 아직 실행되지 않았다. Phase 6은 baseline이 승인되어 release가
+승격되기 전까지 실제 예약을 실행하지 않고 fixture 기반 통합 test로 먼저
+진행한다.
 
 ## 10. 참고 자료
 

@@ -24,10 +24,9 @@ test("uses XDG directories outside the project checkout", () => {
     join(paths.dataDir, "k-skill", "mirror.git"),
   );
   assert.equal(
-    paths.kSkillValidationRoot,
-    join(paths.dataDir, "k-skill", "validation"),
+    paths.kSkillCandidateRoot,
+    join(paths.dataDir, "k-skill", "review-candidates"),
   );
-  assert.equal(paths.kSkillCache, join(paths.cacheDir, "k-skill"));
   assert.equal(paths.releaseRoot, join(paths.dataDir, "k-skill", "releases"));
 });
 

@@ -14,27 +14,10 @@ export interface KSkillPolicy {
     maxPathBytes: number;
     maxSegmentBytes: number;
   };
-  dependencies: {
-    npmRegistry: string;
-    pythonIndex: string;
-    pythonWheels: Array<{
-      name: string;
-      version: string;
-    }>;
-    auditLevel: "high";
-  };
-  validation: {
-    image: string;
-    acquireTimeoutSeconds: number;
-    testTimeoutSeconds: number;
-    cpus: number;
-    memory: string;
-    pidsLimit: number;
-  };
-  codexReview: {
-    required: boolean;
+  behaviorReview: {
+    policyVersion: number;
     timeoutSeconds: number;
-    maxChangedPaths: number;
+    batchSize: number;
   };
   release: {
     minimumRetained: number;
@@ -116,15 +99,7 @@ function parsePolicy(value: unknown): KSkillPolicy {
   const root = requireRecord(value, "policy");
   requireExactKeys(
     root,
-    [
-      "schemaVersion",
-      "upstream",
-      "limits",
-      "dependencies",
-      "validation",
-      "codexReview",
-      "release",
-    ],
+    ["schemaVersion", "upstream", "limits", "behaviorReview", "release"],
     "policy",
   );
   if (root.schemaVersion !== 1) {
@@ -155,86 +130,15 @@ function parsePolicy(value: unknown): KSkillPolicy {
     "policy.limits",
   );
 
-  const dependencies = requireRecord(root.dependencies, "policy.dependencies");
+  const behaviorReview = requireRecord(
+    root.behaviorReview,
+    "policy.behaviorReview",
+  );
   requireExactKeys(
-    dependencies,
-    ["npmRegistry", "pythonIndex", "pythonWheels", "auditLevel"],
-    "policy.dependencies",
+    behaviorReview,
+    ["policyVersion", "timeoutSeconds", "batchSize"],
+    "policy.behaviorReview",
   );
-  const npmRegistry = validateHttpsUrl(
-    requireString(dependencies, "npmRegistry", "policy.dependencies"),
-    "policy.dependencies.npmRegistry",
-  );
-  const pythonIndex = validateHttpsUrl(
-    requireString(dependencies, "pythonIndex", "policy.dependencies"),
-    "policy.dependencies.pythonIndex",
-  );
-  if (dependencies.auditLevel !== "high") {
-    throw new Error("policy.dependencies.auditLevel must be high");
-  }
-  if (!Array.isArray(dependencies.pythonWheels)) {
-    throw new Error("policy.dependencies.pythonWheels must be an array");
-  }
-  const pythonWheels = dependencies.pythonWheels.map((item, index) => {
-    const wheel = requireRecord(
-      item,
-      `policy.dependencies.pythonWheels[${index}]`,
-    );
-    requireExactKeys(
-      wheel,
-      ["name", "version"],
-      `policy.dependencies.pythonWheels[${index}]`,
-    );
-    const name = requireString(
-      wheel,
-      "name",
-      `policy.dependencies.pythonWheels[${index}]`,
-    );
-    const version = requireString(
-      wheel,
-      "version",
-      `policy.dependencies.pythonWheels[${index}]`,
-    );
-    if (
-      !/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/u.test(name) ||
-      !/^[A-Za-z0-9][A-Za-z0-9._+-]{0,127}$/u.test(version)
-    ) {
-      throw new Error(`policy.dependencies.pythonWheels[${index}] is invalid`);
-    }
-    return { name, version };
-  });
-
-  const validation = requireRecord(root.validation, "policy.validation");
-  requireExactKeys(
-    validation,
-    [
-      "image",
-      "acquireTimeoutSeconds",
-      "testTimeoutSeconds",
-      "cpus",
-      "memory",
-      "pidsLimit",
-    ],
-    "policy.validation",
-  );
-  const image = requireString(validation, "image", "policy.validation");
-  if (!/^[A-Za-z0-9][A-Za-z0-9._/:@-]{0,255}$/u.test(image)) {
-    throw new Error("policy.validation.image has an invalid format");
-  }
-  const memory = requireString(validation, "memory", "policy.validation");
-  if (!/^[1-9]\d*(?:[kmg])$/iu.test(memory)) {
-    throw new Error("policy.validation.memory must use a k, m, or g suffix");
-  }
-
-  const codexReview = requireRecord(root.codexReview, "policy.codexReview");
-  requireExactKeys(
-    codexReview,
-    ["required", "timeoutSeconds", "maxChangedPaths"],
-    "policy.codexReview",
-  );
-  if (typeof codexReview.required !== "boolean") {
-    throw new Error("policy.codexReview.required must be boolean");
-  }
 
   const release = requireRecord(root.release, "policy.release");
   requireExactKeys(release, ["minimumRetained"], "policy.release");
@@ -276,53 +180,27 @@ function parsePolicy(value: unknown): KSkillPolicy {
         1024,
       ),
     },
-    dependencies: {
-      npmRegistry,
-      pythonIndex,
-      pythonWheels,
-      auditLevel: "high",
-    },
-    validation: {
-      image,
-      acquireTimeoutSeconds: requireInteger(
-        validation,
-        "acquireTimeoutSeconds",
-        "policy.validation",
-        10,
-        7200,
+    behaviorReview: {
+      policyVersion: requireInteger(
+        behaviorReview,
+        "policyVersion",
+        "policy.behaviorReview",
+        1,
+        1_000_000,
       ),
-      testTimeoutSeconds: requireInteger(
-        validation,
-        "testTimeoutSeconds",
-        "policy.validation",
-        10,
-        7200,
-      ),
-      cpus: requireInteger(validation, "cpus", "policy.validation", 1, 64),
-      memory,
-      pidsLimit: requireInteger(
-        validation,
-        "pidsLimit",
-        "policy.validation",
-        16,
-        32_768,
-      ),
-    },
-    codexReview: {
-      required: codexReview.required,
       timeoutSeconds: requireInteger(
-        codexReview,
+        behaviorReview,
         "timeoutSeconds",
-        "policy.codexReview",
+        "policy.behaviorReview",
         10,
         3600,
       ),
-      maxChangedPaths: requireInteger(
-        codexReview,
-        "maxChangedPaths",
-        "policy.codexReview",
+      batchSize: requireInteger(
+        behaviorReview,
+        "batchSize",
+        "policy.behaviorReview",
         1,
-        100_000,
+        25,
       ),
     },
     release: {

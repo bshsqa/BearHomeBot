@@ -167,7 +167,6 @@ test("promotes validated k-skill releases and rolls back atomically", () => {
     store.markKSkillCandidateValidated({
       sha: firstSha,
       releasePath: `/releases/${firstSha}`,
-      validation: { passed: true },
       review: { status: "approved" },
     });
     store.promoteKSkillRelease(firstSha);
@@ -182,7 +181,6 @@ test("promotes validated k-skill releases and rolls back atomically", () => {
     store.markKSkillCandidateValidated({
       sha: secondSha,
       releasePath: `/releases/${secondSha}`,
-      validation: { passed: true },
       review: { status: "approved" },
     });
     store.promoteKSkillRelease(secondSha);
@@ -226,6 +224,39 @@ test("records rejected k-skill candidates without release content", () => {
     assert.equal(rejected.status, "rejected");
     assert.equal(rejected.failureCode, "deterministic_gate_failed");
     assert.equal(rejected.releasePath, undefined);
+  } finally {
+    store.close();
+  }
+});
+
+test("caches behavior reviews by skill digest and policy version", () => {
+  const store = createStore();
+  const sha = "d".repeat(40);
+  const digest = "e".repeat(64);
+  try {
+    store.recordKSkillCandidate({
+      sha,
+      treeSha: "4".repeat(40),
+      sourceUrl: "https://github.com/NomaDamas/k-skill.git",
+      sourceBranch: "main",
+      manifest: { behavior: true },
+    });
+    store.recordKSkillBehaviorReview({
+      skillId: "ktx-booking",
+      contentDigest: digest,
+      policyVersion: 1,
+      sourceSha: sha,
+      review: { status: "approved" },
+    });
+
+    assert.deepEqual(
+      store.getKSkillBehaviorReview("ktx-booking", digest, 1)?.review,
+      { status: "approved" },
+    );
+    assert.equal(
+      store.getKSkillBehaviorReview("ktx-booking", digest, 2),
+      undefined,
+    );
   } finally {
     store.close();
   }

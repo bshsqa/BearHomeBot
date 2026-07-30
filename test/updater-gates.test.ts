@@ -119,8 +119,7 @@ test("builds a deterministic manifest for a valid candidate", async () => {
 
     assert.equal(manifest.source.sha, candidate.sha);
     assert.equal(manifest.tree.fileCount, 2);
-    assert.equal(manifest.dependencies.lockedNodeModules, 0);
-    assert.equal(manifest.deterministicGates.status, "passed");
+    assert.equal(manifest.loaderSafety.status, "passed");
   } finally {
     rmSync(context.root, { recursive: true, force: true });
   }
@@ -152,42 +151,6 @@ test("rejects symlinks and submodule gitlinks before checkout", async (t) => {
       git(context.source, "commit", "--quiet", "-m", "add gitlink");
       git(context.source, "push", "--quiet", "origin", "main");
       assert.equal(await rejectionCode(context), "submodule");
-    } finally {
-      rmSync(context.root, { recursive: true, force: true });
-    }
-  });
-});
-
-test("rejects unsafe dependency sources and candidate npm config", async (t) => {
-  await t.test("Git dependency", async () => {
-    const context = fixture();
-    try {
-      writeFileSync(
-        join(context.source, "package.json"),
-        JSON.stringify({
-          name: "fixture",
-          version: "1.0.0",
-          dependencies: {
-            unsafe: "git+https://example.com/unsafe.git",
-          },
-        }),
-      );
-      commitAndPush(context.source, "unsafe dependency");
-      assert.equal(await rejectionCode(context), "dependency_policy");
-    } finally {
-      rmSync(context.root, { recursive: true, force: true });
-    }
-  });
-
-  await t.test(".npmrc", async () => {
-    const context = fixture();
-    try {
-      writeFileSync(
-        join(context.source, ".npmrc"),
-        "registry=https://example.com/\n",
-      );
-      commitAndPush(context.source, "custom npm config");
-      assert.equal(await rejectionCode(context), "dependency_policy");
     } finally {
       rmSync(context.root, { recursive: true, force: true });
     }
@@ -234,25 +197,6 @@ test("rejects paths reserved for host metadata", async () => {
     );
     commitAndPush(context.source, "reserved release metadata");
     assert.equal(await rejectionCode(context), "invalid_path");
-  } finally {
-    rmSync(context.root, { recursive: true, force: true });
-  }
-});
-
-test("rejects candidates whose changed paths exceed the review limit", async () => {
-  const context = fixture();
-  try {
-    writeFileSync(join(context.source, "one.txt"), "one\n");
-    writeFileSync(join(context.source, "two.txt"), "two\n");
-    commitAndPush(context.source, "too many changed paths");
-    const policy: KSkillPolicy = {
-      ...context.policy,
-      codexReview: {
-        ...context.policy.codexReview,
-        maxChangedPaths: 3,
-      },
-    };
-    assert.equal(await rejectionCode(context, policy), "changed_path_limit");
   } finally {
     rmSync(context.root, { recursive: true, force: true });
   }

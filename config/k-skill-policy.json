@@ -11,33 +11,10 @@
     "maxPathBytes": 4096,
     "maxSegmentBytes": 255
   },
-  "dependencies": {
-    "npmRegistry": "https://registry.npmjs.org/",
-    "pythonIndex": "https://pypi.org/simple",
-    "pythonWheels": [
-      {
-        "name": "beautifulsoup4",
-        "version": "4.12.3"
-      },
-      {
-        "name": "soupsieve",
-        "version": "2.9.1"
-      }
-    ],
-    "auditLevel": "high"
-  },
-  "validation": {
-    "image": "localhost/bearhomebot-k-skill-validator:phase4",
-    "acquireTimeoutSeconds": 900,
-    "testTimeoutSeconds": 1200,
-    "cpus": 2,
-    "memory": "2g",
-    "pidsLimit": 512
-  },
-  "codexReview": {
-    "required": true,
+  "behaviorReview": {
+    "policyVersion": 1,
     "timeoutSeconds": 600,
-    "maxChangedPaths": 1000
+    "batchSize": 8
   },
   "release": {
     "minimumRetained": 3

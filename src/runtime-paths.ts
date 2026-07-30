@@ -10,8 +10,7 @@ export interface RuntimePaths {
   codexWorkspace: string;
   kSkillRoot: string;
   kSkillMirror: string;
-  kSkillValidationRoot: string;
-  kSkillCache: string;
+  kSkillCandidateRoot: string;
   kSkillReviewWorkspace: string;
   kSkillUpdateLock: string;
   releaseRoot: string;
@@ -83,8 +82,7 @@ export function resolveRuntimePaths(
     codexWorkspace: join(dataDir, "codex-workspace"),
     kSkillRoot,
     kSkillMirror: join(kSkillRoot, "mirror.git"),
-    kSkillValidationRoot: join(kSkillRoot, "validation"),
-    kSkillCache: join(cacheDir, "k-skill"),
+    kSkillCandidateRoot: join(kSkillRoot, "review-candidates"),
     kSkillReviewWorkspace: join(kSkillRoot, "review-workspace"),
     kSkillUpdateLock: join(kSkillRoot, "update.lock"),
     releaseRoot: join(kSkillRoot, "releases"),
@@ -101,8 +99,7 @@ export async function ensureRuntimeDirectories(
       paths.cacheDir,
       paths.codexWorkspace,
       paths.kSkillRoot,
-      paths.kSkillValidationRoot,
-      paths.kSkillCache,
+      paths.kSkillCandidateRoot,
       paths.kSkillReviewWorkspace,
       paths.releaseRoot,
     ].map(async (directory) => {

@@ -18,24 +18,22 @@ import {
 import { createHash, randomUUID } from "node:crypto";
 import { dirname, join, resolve } from "node:path";
 
-import type { CandidateManifest } from "./gates.js";
 import type { GitCandidate, KSkillGitMirror } from "./git.js";
 import { minimalHostEnvironment, runCommand } from "./process.js";
-import type { CandidateValidationResult } from "./validator.js";
-import type { CodexReviewResult } from "./reviewer.js";
+import type { CandidateBehaviorReview } from "./reviewer.js";
+import type { ReviewedCandidateManifest } from "./skills.js";
 
 const RELEASE_MARKER = ".bearhomebot-release.json";
 const MATERIALIZE_TIMEOUT_MILLISECONDS = 2 * 60 * 1_000;
 
 export interface ReleaseMetadata {
-  schemaVersion: 1;
+  schemaVersion: 2;
   sha: string;
   treeSha: string;
   contentDigest: string;
   validatedAt: string;
-  manifest: CandidateManifest;
-  validation: CandidateValidationResult;
-  review: CodexReviewResult;
+  manifest: ReviewedCandidateManifest;
+  review: CandidateBehaviorReview;
 }
 
 function fsyncPath(path: string): void {
@@ -127,13 +125,12 @@ function parseMetadata(path: string): ReleaseMetadata {
   }
   const metadata = value as Record<string, unknown>;
   if (
-    metadata.schemaVersion !== 1 ||
+    metadata.schemaVersion !== 2 ||
     typeof metadata.sha !== "string" ||
     typeof metadata.treeSha !== "string" ||
     typeof metadata.contentDigest !== "string" ||
     typeof metadata.validatedAt !== "string" ||
     !metadata.manifest ||
-    !metadata.validation ||
     !metadata.review
   ) {
     throw new Error("Release metadata is incomplete");
@@ -143,14 +140,14 @@ function parseMetadata(path: string): ReleaseMetadata {
 
 export class KSkillReleaseManager {
   readonly #releaseRoot: string;
-  readonly #validationRoot: string;
+  readonly #candidateRoot: string;
   readonly #tarExecutable: string;
   readonly #env: NodeJS.ProcessEnv;
   readonly #now: () => Date;
 
   constructor(
     releaseRoot: string,
-    validationRoot: string,
+    candidateRoot: string,
     options: {
       tarExecutable?: string;
       env?: NodeJS.ProcessEnv;
@@ -158,21 +155,21 @@ export class KSkillReleaseManager {
     } = {},
   ) {
     this.#releaseRoot = resolve(releaseRoot);
-    this.#validationRoot = resolve(validationRoot);
+    this.#candidateRoot = resolve(candidateRoot);
     this.#tarExecutable = options.tarExecutable ?? "tar";
     this.#env = minimalHostEnvironment(options.env);
     this.#now = options.now ?? (() => new Date());
     mkdirSync(this.#releaseRoot, { recursive: true, mode: 0o700 });
-    mkdirSync(this.#validationRoot, { recursive: true, mode: 0o700 });
+    mkdirSync(this.#candidateRoot, { recursive: true, mode: 0o700 });
   }
 
-  async createValidationDirectory(
+  async createReviewDirectory(
     mirror: KSkillGitMirror,
     candidate: GitCandidate,
     signal?: AbortSignal,
   ): Promise<string> {
     const directory = mkdtempSync(
-      join(this.#validationRoot, `${candidate.sha}-`),
+      join(this.#candidateRoot, `${candidate.sha}-`),
     );
     try {
       await this.#materialize(mirror, candidate.sha, directory, signal);
@@ -183,13 +180,13 @@ export class KSkillReleaseManager {
     }
   }
 
-  removeValidationDirectory(path: string): void {
+  removeReviewDirectory(path: string): void {
     const resolved = resolve(path);
     if (
-      dirname(resolved) !== this.#validationRoot ||
-      !resolved.startsWith(`${this.#validationRoot}/`)
+      dirname(resolved) !== this.#candidateRoot ||
+      !resolved.startsWith(`${this.#candidateRoot}/`)
     ) {
-      throw new Error("Refusing to remove a path outside validation root");
+      throw new Error("Refusing to remove a path outside candidate root");
     }
     rmSync(resolved, { recursive: true, force: true });
   }
@@ -197,9 +194,8 @@ export class KSkillReleaseManager {
   async finalizeRelease(
     mirror: KSkillGitMirror,
     candidate: GitCandidate,
-    manifest: CandidateManifest,
-    validation: CandidateValidationResult,
-    review: CodexReviewResult,
+    manifest: ReviewedCandidateManifest,
+    review: CandidateBehaviorReview,
     signal?: AbortSignal,
   ): Promise<{ path: string; metadata: ReleaseMetadata }> {
     const target = join(this.#releaseRoot, candidate.sha);
@@ -216,13 +212,12 @@ export class KSkillReleaseManager {
     try {
       await this.#materialize(mirror, candidate.sha, staging, signal);
       const metadata: ReleaseMetadata = {
-        schemaVersion: 1,
+        schemaVersion: 2,
         sha: candidate.sha,
         treeSha: candidate.treeSha,
         contentDigest: hashDirectory(staging),
         validatedAt: this.#now().toISOString(),
         manifest,
-        validation,
         review,
       };
       const marker = join(staging, RELEASE_MARKER);

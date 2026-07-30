@@ -2,7 +2,7 @@ import { chmodSync, mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 
-const SCHEMA_VERSION = 2;
+const SCHEMA_VERSION = 3;
 const MAX_SESSION_NAME_LENGTH = 80;
 
 export type UserRole = "admin" | "member";
@@ -40,7 +40,6 @@ export interface KSkillReleaseRecord {
   sourceBranch: string;
   status: KSkillReleaseStatus;
   manifest?: unknown;
-  validation?: unknown;
   review?: unknown;
   releasePath?: string;
   failureCode?: string;
@@ -48,6 +47,15 @@ export interface KSkillReleaseRecord {
   validatedAt?: string;
   activatedAt?: string;
   updatedAt: string;
+}
+
+export interface KSkillBehaviorReviewRecord {
+  skillId: string;
+  contentDigest: string;
+  policyVersion: number;
+  sourceSha: string;
+  review: unknown;
+  reviewedAt: string;
 }
 
 export interface KSkillActiveState {
@@ -97,7 +105,6 @@ interface KSkillReleaseRow {
   source_branch: string;
   status: KSkillReleaseStatus;
   manifest_json: string | null;
-  validation_json: string | null;
   review_json: string | null;
   release_path: string | null;
   failure_code: string | null;
@@ -105,6 +112,15 @@ interface KSkillReleaseRow {
   validated_at: string | null;
   activated_at: string | null;
   updated_at: string;
+}
+
+interface KSkillBehaviorReviewRow {
+  skill_id: string;
+  content_digest: string;
+  policy_version: number;
+  source_sha: string;
+  review_json: string;
+  reviewed_at: string;
 }
 
 function rowToUser(row: UserRow): BearHomeUser {
@@ -147,13 +163,9 @@ function rowToKSkillRelease(row: KSkillReleaseRow): KSkillReleaseRecord {
     updatedAt: row.updated_at,
   };
   const manifest = parseStoredJson(row.manifest_json);
-  const validation = parseStoredJson(row.validation_json);
   const review = parseStoredJson(row.review_json);
   if (manifest !== undefined) {
     release.manifest = manifest;
-  }
-  if (validation !== undefined) {
-    release.validation = validation;
   }
   if (review !== undefined) {
     release.review = review;
@@ -185,6 +197,44 @@ function validateFailureCode(code: string): string {
     throw new Error("k-skill failure code has an invalid format");
   }
   return code;
+}
+
+function validateSkillId(skillId: string): string {
+  if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/u.test(skillId)) {
+    throw new Error("k-skill behavior review skill ID is invalid");
+  }
+  return skillId;
+}
+
+function validateContentDigest(contentDigest: string): string {
+  if (!/^[0-9a-f]{64}$/u.test(contentDigest)) {
+    throw new Error("k-skill behavior review digest is invalid");
+  }
+  return contentDigest;
+}
+
+function validatePolicyVersion(policyVersion: number): number {
+  if (
+    !Number.isSafeInteger(policyVersion) ||
+    policyVersion < 1 ||
+    policyVersion > 1_000_000
+  ) {
+    throw new Error("k-skill behavior review policy version is invalid");
+  }
+  return policyVersion;
+}
+
+function rowToKSkillBehaviorReview(
+  row: KSkillBehaviorReviewRow,
+): KSkillBehaviorReviewRecord {
+  return {
+    skillId: row.skill_id,
+    contentDigest: row.content_digest,
+    policyVersion: row.policy_version,
+    sourceSha: row.source_sha,
+    review: JSON.parse(row.review_json) as unknown,
+    reviewedAt: row.reviewed_at,
+  };
 }
 
 function normalizeSessionName(name: string): string {
@@ -580,7 +630,6 @@ export class StateStore {
   markKSkillCandidateValidated(candidate: {
     sha: string;
     releasePath: string;
-    validation: unknown;
     review: unknown;
   }): KSkillReleaseRecord {
     validateGitSha(candidate.sha);
@@ -588,14 +637,13 @@ export class StateStore {
     const result = this.#database
       .prepare(
         `UPDATE k_skill_releases
-         SET status = 'validated', release_path = ?, validation_json = ?,
-             review_json = ?, failure_code = NULL, validated_at = ?,
+         SET status = 'validated', release_path = ?, review_json = ?,
+             failure_code = NULL, validated_at = ?,
              updated_at = ?
          WHERE sha = ? AND status != 'active'`,
       )
       .run(
         candidate.releasePath,
-        JSON.stringify(candidate.validation),
         JSON.stringify(candidate.review),
         now,
         now,
@@ -605,6 +653,68 @@ export class StateStore {
       throw new Error("k-skill candidate could not be marked validated");
     }
     return this.#requireKSkillRelease(candidate.sha);
+  }
+
+  getKSkillBehaviorReview(
+    skillId: string,
+    contentDigest: string,
+    policyVersion: number,
+  ): KSkillBehaviorReviewRecord | undefined {
+    validateSkillId(skillId);
+    validateContentDigest(contentDigest);
+    validatePolicyVersion(policyVersion);
+    const row = this.#database
+      .prepare(
+        `SELECT skill_id, content_digest, policy_version, source_sha,
+                review_json, reviewed_at
+         FROM k_skill_behavior_reviews
+         WHERE skill_id = ? AND content_digest = ? AND policy_version = ?`,
+      )
+      .get(skillId, contentDigest, policyVersion) as
+      KSkillBehaviorReviewRow | undefined;
+    return row ? rowToKSkillBehaviorReview(row) : undefined;
+  }
+
+  recordKSkillBehaviorReview(review: {
+    skillId: string;
+    contentDigest: string;
+    policyVersion: number;
+    sourceSha: string;
+    review: unknown;
+  }): KSkillBehaviorReviewRecord {
+    validateSkillId(review.skillId);
+    validateContentDigest(review.contentDigest);
+    validatePolicyVersion(review.policyVersion);
+    validateGitSha(review.sourceSha);
+    const now = this.#now();
+    this.#database
+      .prepare(
+        `INSERT INTO k_skill_behavior_reviews (
+           skill_id, content_digest, policy_version, source_sha,
+           review_json, reviewed_at
+         ) VALUES (?, ?, ?, ?, ?, ?)
+         ON CONFLICT(skill_id, content_digest, policy_version) DO UPDATE SET
+           source_sha = excluded.source_sha,
+           review_json = excluded.review_json,
+           reviewed_at = excluded.reviewed_at`,
+      )
+      .run(
+        review.skillId,
+        review.contentDigest,
+        review.policyVersion,
+        review.sourceSha,
+        JSON.stringify(review.review),
+        now,
+      );
+    const stored = this.getKSkillBehaviorReview(
+      review.skillId,
+      review.contentDigest,
+      review.policyVersion,
+    );
+    if (!stored) {
+      throw new Error("k-skill behavior review could not be stored");
+    }
+    return stored;
   }
 
   promoteKSkillRelease(sha: string): KSkillReleaseRecord {
@@ -692,7 +802,7 @@ export class StateStore {
     const row = this.#database
       .prepare(
         `SELECT sha, tree_sha, source_url, source_branch, status,
-                manifest_json, validation_json, review_json, release_path,
+                manifest_json, review_json, release_path,
                 failure_code, discovered_at, validated_at, activated_at,
                 updated_at
          FROM k_skill_releases
@@ -730,7 +840,7 @@ export class StateStore {
     const rows = this.#database
       .prepare(
         `SELECT sha, tree_sha, source_url, source_branch, status,
-                manifest_json, validation_json, review_json, release_path,
+                manifest_json, review_json, release_path,
                 failure_code, discovered_at, validated_at, activated_at,
                 updated_at
          FROM k_skill_releases
@@ -850,6 +960,27 @@ export class StateStore {
           INSERT INTO k_skill_state (id) VALUES (1);
         `);
         this.#database.exec("PRAGMA user_version = 2");
+      });
+    }
+    if (version < 3) {
+      this.#transaction(() => {
+        this.#database.exec(`
+          ALTER TABLE k_skill_releases DROP COLUMN validation_json;
+
+          CREATE TABLE k_skill_behavior_reviews (
+            skill_id TEXT NOT NULL,
+            content_digest TEXT NOT NULL,
+            policy_version INTEGER NOT NULL CHECK (policy_version >= 1),
+            source_sha TEXT NOT NULL REFERENCES k_skill_releases(sha),
+            review_json TEXT NOT NULL,
+            reviewed_at TEXT NOT NULL,
+            PRIMARY KEY (skill_id, content_digest, policy_version)
+          );
+
+          CREATE INDEX k_skill_behavior_reviews_by_source
+            ON k_skill_behavior_reviews(source_sha);
+        `);
+        this.#database.exec("PRAGMA user_version = 3");
       });
     }
   }

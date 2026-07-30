@@ -162,11 +162,6 @@ check_commands() {
     fail "Codex CLI is not installed"
   fi
 
-  if version="$(command_version podman --version)"; then
-    pass "$version"
-  else
-    fail "Podman is not installed; rootless Podman is required for candidate validation"
-  fi
 }
 
 check_systemd() {

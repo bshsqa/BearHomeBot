@@ -9,7 +9,7 @@ policy와 문서뿐이다. 다음 항목은 각 PC에서 새로 만든다.
 - Telegram bot token 설정
 - Telegram allowlist bootstrap 설정
 - BearHomeBot SQLite와 `/sessions`
-- `k-skill` mirror, validation cache와 active release
+- `k-skill` mirror, 스킬 동작 검토 cache와 active release
 - 향후 추가할 사용자별 service credential
 
 가족이 사용하는 동일 Telegram bot token의 gateway는 한 번에 한 PC에서만
@@ -178,8 +178,8 @@ codex login status
 가족이 여러 명이면 각 숫자 user ID를 같은 명령으로 추가한다. token과
 user ID 설정은 Git에 넣지 않는다.
 
-`install.sh`는 rootless Podman validator image도 빌드한다. 환경 검증 후
-현재 `k-skill` 후보를 실행 없이 검사할 수 있다.
+환경 검증 후 현재 `k-skill` 후보의 로딩 안전 조건을 실행 없이 검사할 수
+있다.
 
 ```bash
 ./scripts/k-skill-updater.sh check
