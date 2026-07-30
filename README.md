@@ -3,10 +3,11 @@
 BearHomeBot은 승인된 Telegram 사용자의 요청을 Codex CLI와 검증된
 `k-skill` 실행으로 연결하는 Ubuntu 기반 홈 자동화 서비스입니다.
 
-현재 Telegram과 Codex CLI의 다중 세션 대화, 그리고 fail-closed
-`k-skill` 공급망 updater가 구현되어 있습니다. 사용자별 서비스 계정과
-credentialed capability는 아직 연결하지 않았으며, 모든 런타임 설정과
-상태는 저장소 밖의 전용 경로를 사용합니다.
+현재 Telegram과 Codex CLI의 다중 세션 대화, fail-closed `k-skill`
+공급망 updater, 사용자별 encrypted vault와 Secret Broker 기반이 구현되어
+있습니다. 실제 서비스 계정을 사용하는 credentialed capability는 아직
+연결하지 않았으며, 모든 런타임 설정과 상태는 저장소 밖의 전용 경로를
+사용합니다.
 
 ## 기준 환경
 
@@ -124,7 +125,50 @@ Phase 8의 systemd service가 구현되기 전까지 이 process는 foreground�
 
 Telegram 토큰은 임시 bootstrap 저장소인
 `~/.config/bearhomebot/telegram.env`에 mode `0600`으로 저장됩니다.
-Secret Broker가 구현되면 암호화 vault로 이전할 예정입니다.
+Telegram gateway credential 분리는 운영 service 계정 구성 단계에서
+진행합니다.
+
+## 암호화 credential vault
+
+현재 WSL2 host에서는 vault master key를 Windows DPAPI `CurrentUser`로
+보호합니다. C 드라이브 암호화는 이 프로젝트의 필수 조건이 아니지만,
+KTX ID와 password 자체는 항상 별도 vault database에서 AES-256-GCM으로
+인증 암호화합니다. DPAPI가 설정되지 않았거나 현재 Windows 사용자로
+해제할 수 없으면 credential 기능만 fail-closed로 잠깁니다.
+
+최초 한 번 vault를 초기화하고 상태를 확인합니다.
+
+```bash
+npm run build
+./scripts/setup-vault.sh
+node dist/vault-main.js status
+```
+
+Phase 6에서 KTX 기능을 연결할 때 관리자가 로컬 terminal에서 사용자별
+credential을 등록합니다. 입력값은 화면에 표시되지 않고 명령행 인자,
+Telegram 또는 Codex prompt로 전달되지 않습니다.
+
+```bash
+./scripts/configure-ktx-credentials.sh <Telegram 숫자 사용자 ID>
+node dist/vault-main.js list <Telegram 숫자 사용자 ID>
+```
+
+기존 mode `0600` k-skill 설정을 가져올 수도 있습니다. importer는
+`KSKILL_KTX_ID`와 `KSKILL_KTX_PASSWORD`만 읽고 원본을 자동 삭제하지
+않습니다.
+
+```bash
+./scripts/import-k-skill-credentials.sh <Telegram 숫자 사용자 ID> \
+  ~/.config/k-skill/secrets.env
+```
+
+개발 단계에서 Secret Broker를 별도 foreground process로 확인하려면
+다음을 사용합니다. 실제 예약 capability와 systemd service 연결은
+Phase 6과 Phase 8에서 진행합니다.
+
+```bash
+./scripts/start-secret-broker.sh
+```
 
 ## 개발 명령
 
@@ -145,6 +189,8 @@ BearHomeBot은 실제 운영 상태를 Git checkout에 저장하지 않습니다
 ~/.config/bearhomebot
 ~/.local/share/bearhomebot
 ~/.cache/bearhomebot
+~/.config/bearhomebot-vault
+~/.local/share/bearhomebot-vault
 ```
 
 `XDG_CONFIG_HOME`, `XDG_DATA_HOME`, `XDG_CACHE_HOME`이 설정된 환경에서는
@@ -159,8 +205,8 @@ SQLite에는 Telegram 사용자, 세션 소유권, Codex thread ID, 표시 이�
 compaction은 Codex가 관리합니다.
 
 개발용 임시 상태는 Git에서 제외된 `.runtime/`만 사용할 수 있습니다.
-실제 사용자 비밀정보는 아직 지원하지 않으며, Secret Broker가 구현되기
-전에는 이 프로젝트에 입력하지 않습니다.
+실제 사용자 credential은 위의 local admin 명령으로만 encrypted vault에
+등록하며 Git checkout, Telegram 또는 Codex prompt에 입력하지 않습니다.
 
 Telegram bot token은 별도의 `0600` 로컬 파일에 보관하며 Codex
 프로세스나 Git checkout에 전달되지 않습니다.

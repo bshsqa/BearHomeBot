@@ -17,6 +17,11 @@ policy와 문서뿐이다. 다음 항목은 각 PC에서 새로 만든다.
 없다. 개발 PC에서 실제 봇을 시험해야 하면 운영 gateway를 먼저 끄거나,
 별도의 개발용 Telegram bot을 사용한다.
 
+Windows DPAPI로 보호한 vault keyring은 해당 Windows 사용자와 PC에
+묶이므로 다른 host로 복사하지 않는다. 새 host에서는 vault를 새로
+초기화하고 credential을 local hidden-input 명령으로 다시 등록한다.
+`vault.sqlite`, DPAPI keyring 또는 master key를 Git으로 전달하지 않는다.
+
 ## 역할
 
 ### 개발 PC

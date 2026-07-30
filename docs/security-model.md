@@ -31,10 +31,13 @@ SQLite는 thread ID와 turn metadata만 저장하며 prompt와 답변 원문을
 candidate가 작성한 validation tree는 폐기하며, active release는 검증된
 동일 Git SHA에서 새로 만든다. 모든 오류와 불확실성은 fail-closed다.
 
-서비스 credential은 Phase 5의 별도 encrypted vault와 Secret Broker가
-구현되기 전에는 BearHomeBot 작업에 사용하지 않는다. 목표 구조에서는
-Codex가 secret 평문을 보거나 복호화하지 않고, 검증된 typed operation을
-위해 broker가 최소 child environment에 잠시 주입한다.
+서비스 credential은 normal state와 분리된 encrypted vault에 저장한다.
+각 값은 AES-256-GCM으로 principal과 credential/version metadata에
+인증 결합되며, WSL2 host의 master key는 Windows DPAPI `CurrentUser`로
+감싼 값만 vault 밖의 owner-only keyring에 저장한다. Secret Broker socket은
+metadata만 반환하고 secret value를 반환하는 API가 없다. Phase 6의
+credentialed operation에서도 Codex가 secret 평문을 보거나 복호화하지
+않고, broker 내부의 allowlisted handler가 pinned helper에만 잠시 주입한다.
 
 ## 방어 범위
 
@@ -49,8 +52,8 @@ candidate path escape, submodule과 symlink, 비정상 history, 과도한 tree,
   적용을 권장한다. 적용하지 않은 host에서도 credential vault의 평문 저장은
   허용하지 않으며 승인된 key provider가 없으면 credential 기능을 잠근다.
 - gateway, Codex, updater, Secret Broker의 Unix account 분리
-- 수동 passphrase, Windows DPAPI, TPM 또는 root-owned systemd credential
-  중 host에 맞는 provider로 vault master key를 보관
+- WSL2에서는 Windows DPAPI, native Ubuntu에서는 TPM 또는 root-owned
+  systemd credential처럼 host에 맞는 provider로 vault master key를 보관
 - provider별 egress allowlist
 - encrypted backup과 restore drill
 - systemd hardening과 보안 update
@@ -58,3 +61,10 @@ candidate path escape, submodule과 symlink, 비정상 history, 과도한 tree,
 로컬 Unix account나 실행 중인 운영체제 전체가 이미 침해된 상황은
 애플리케이션 암호화만으로 완전히 방어할 수 없다. disk encryption,
 process ownership, 최소 권한, credential 분리가 함께 적용되어야 한다.
+
+현재 WSL2 host는 C 드라이브 암호화를 사용하지 않는다. 따라서 vault
+database만 복사된 경우에는 application encryption이 보호하지만, 로그인된
+Windows 계정 전체나 실행 중인 WSL user가 침해된 상황은 방어하지 못한다.
+DPAPI `CurrentUser` keyring은 같은 Windows 사용자와 같은 PC에서만 정상
+해제되는 운영 편의 선택이며, 다른 PC로 복사해 복호화하는 backup key가
+아니다.

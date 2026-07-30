@@ -1,0 +1,56 @@
+{
+  "schemaVersion": 1,
+  "timezone": "Asia/Seoul",
+  "hostDiskEncryption": {
+    "required": false,
+    "currentProfile": "unencrypted-wsl2"
+  },
+  "actions": {
+    "automatic": [
+      "public.read",
+      "public.search"
+    ],
+    "confirmationRequired": [
+      "reservation.create",
+      "reservation.cancel"
+    ],
+    "prohibited": [
+      "electronic-signature",
+      "money.transfer",
+      "payment"
+    ]
+  },
+  "kSkillUpdate": {
+    "localTime": "00:00",
+    "missedRun": "run-on-next-startup-once"
+  },
+  "logs": {
+    "retentionDays": 30,
+    "maximumBytes": 104857600,
+    "excludeContent": [
+      "codex-prompt",
+      "codex-response",
+      "credential",
+      "telegram-token"
+    ]
+  },
+  "backups": {
+    "schedule": "weekly",
+    "day": "sunday",
+    "localTime": "03:00",
+    "retentionCopies": 8,
+    "include": [
+      "normal-state-database",
+      "encrypted-vault-database"
+    ],
+    "exclude": [
+      "codex-local-state",
+      "telegram-bootstrap-token",
+      "vault-master-key"
+    ],
+    "destinationRequired": true
+  },
+  "failureAlerts": {
+    "target": "telegram-admin"
+  }
+}

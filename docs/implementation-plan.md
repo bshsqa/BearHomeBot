@@ -142,7 +142,7 @@ root가 관리하는 systemd credential 또는 동등한 전용 secret 경로에
 
 ### Phase 0: 운영 결정과 위협 모델
 
-상태: 진행 중
+상태: 현재 WSL2 host 기준 완료
 
 작업:
 
@@ -163,6 +163,20 @@ root가 관리하는 systemd credential 또는 동등한 전용 secret 경로에
 - host disk encryption이 없어도 credential 평문 저장은 허용하지 않는다.
   Phase 5의 승인된 key provider로 vault를 열기 전까지 credential 기능은
   fail-closed 상태로 유지한다.
+- 공개 조회와 검색은 자동 실행할 수 있다. 예약 생성과 취소는 실행 직전
+  Telegram 재확인이 필요하며 결제, 송금, 전자서명은 금지한다.
+- `k-skill` updater는 매일 00:00 `Asia/Seoul`에 실행하고, PC가 꺼져
+  누락된 경우 다음 시작 후 한 번 보충한다.
+- application과 journald log는 30일 또는 합계 100 MiB 중 먼저 도달한
+  한도를 적용한다. Codex prompt와 답변 원문, credential, Telegram token은
+  log에서 제외한다.
+- normal state database와 encrypted vault database를 매주 일요일 03:00에
+  backup하고 8개를 보존한다. vault master key, Telegram bootstrap token,
+  Codex local state는 같은 backup에 넣지 않는다. 외부 backup 목적지가
+  설정되지 않으면 자동 backup을 시작하지 않고 admin에게 알린다.
+- 실패 알림 대상은 Telegram admin이다.
+- 이 결정은 `config/operations-policy.json`에 version-controlled policy로
+  저장하고 loader test로 각 action이 정확히 한 분류만 갖도록 검증한다.
 
 완료 조건:
 
@@ -407,30 +421,41 @@ same Telegram private chat
 
 ### Phase 5: Secret Broker와 사용자별 credential
 
-상태: Phase 4 완료 후 시작
+상태: 구현 완료, 현재 WSL2의 Windows DPAPI 실환경 검증 완료
 
-작업:
+구현 내용:
 
-- normal state와 별도인 encrypted vault database를 만든다.
-- secret value마다 AES-256-GCM 또는 XChaCha20-Poly1305 같은 authenticated
-  encryption을 적용한다.
-- master key를 repository와 vault database 밖에 생성한다.
-- master key provider를 수동 passphrase, Windows DPAPI, native Ubuntu의
-  TPM/systemd credential처럼 host별로 선택할 수 있게 분리한다.
-- key provider가 설정되지 않았거나 vault가 잠겨 있으면 일반 대화와 공개
-  조회만 허용하고 credential operation은 fail-closed로 거부한다.
-- master key를 vault 옆의 평문 파일에 저장하는 provider는 지원하지 않는다.
-- key versioning과 credential rotation을 지원한다.
-- dedicated service account가 vault와 master key를 소유하게 한다.
-- allowlisted typed operation만 받는 Unix domain socket API를 만든다.
-- caller와 trusted principal을 검증하고 model-generated user ID를 무시한다.
-- credential 이름과 존재 여부는 조회할 수 있지만 값은 반환하지 않는다.
-- `~/.config/k-skill/secrets.env`를 선택한 BearHomeBot user에게 import하는
-  local admin command를 만든다.
-- importer는 source owner와 mode `0600`을 검사하고 원본을 자동 삭제하지
-  않는다.
-- log, exception, child output, Telegram response에 대한 redaction test를
-  추가한다.
+- normal state와 분리된
+  `~/.local/share/bearhomebot-vault/vault.sqlite`를 mode `0600`으로
+  생성한다.
+- secret value마다 AES-256-GCM authenticated encryption을 적용하고
+  Telegram principal, credential scope/name, credential version, key
+  version을 additional authenticated data로 묶는다.
+- 32-byte master key를 repository와 vault database 밖에서 생성하고,
+  WSL2에서는 Windows DPAPI `CurrentUser`로 감싼 versioned keyring만
+  `~/.config/bearhomebot-vault/`에 mode `0600`으로 저장한다.
+- key provider interface를 분리하고 provider가 없거나 DPAPI 해제가
+  실패하면 credential 기능을 fail-closed로 거부한다. master key 평문
+  file provider는 지원하지 않는다.
+- credential rotation과 master key version rotation을 구현한다. rotation
+  중 기존 key version도 보존해 중단 후 복호화가 가능하다.
+- mode `0600` Unix domain socket에서 strict schema와 allowlisted
+  metadata operation만 받는 Secret Broker를 구현한다. API에는 secret
+  value를 반환하는 operation이 없다.
+- gateway가 확인한 numeric Telegram principal만 구조화된 값으로 전달하고,
+  normal state의 enabled user를 다시 확인한다. 자연어 또는 Codex 출력에서
+  user ID를 추출하는 경로는 만들지 않는다.
+- 사용자별 credential 이름, 존재 여부와 version metadata만 조회하며
+  다른 사용자 행은 반환하지 않는다.
+- hidden terminal 입력 등록 명령과
+  `~/.config/k-skill/secrets.env` local importer를 구현했다. importer는
+  source owner, regular file, mode `0600`, 크기와 allowlisted KTX 이름을
+  확인하고 원본을 자동 삭제하지 않는다.
+- literal, URL-encoded, base64, environment assignment, Telegram token과
+  bearer token 형태에 중앙 redaction test를 추가했다.
+- 운영 Unix service account와 socket group 분리는 Phase 8 service 설치와
+  Phase 9 hardening에서 적용한다. 현재 개발 host에서는 owner-only path와
+  Codex filesystem deny profile로 접근을 분리한다.
 
 완료 조건:
 
@@ -440,6 +465,22 @@ same Telegram private chat
 - normal state database나 일반 backup만 복사해서는 credential이 노출되지
   않는다.
 - User A는 User B의 credential을 사용하거나 존재 여부를 조회할 수 없다.
+
+현재 검증:
+
+- unit/integration test가 ciphertext와 tag 변조, 잘못된 AAD principal,
+  사용자 간 metadata 분리, 잠긴/insecure keyring, credential/key rotation,
+  importer source mode, socket mode와 응답 redaction을 검증한다.
+- 현재 WSL2에서 Windows PowerShell 5.1 DPAPI `CurrentUser`로 빈 운영 vault를
+  초기화하고 재해제했다. keyring과 database는 각각 mode `0600`, parent
+  directory는 `0700`임을 확인했다.
+- 실제 DPAPI로 해제한 vault를 사용하는 Unix socket broker를 시작해 등록된
+  Telegram principal의 빈 metadata 응답을 받고 정상 종료와 socket 정리를
+  확인했다.
+- 실제 Codex CLI를 BearHomeBot의 filesystem deny profile로 실행해 vault
+  database 읽기 probe가 `VAULT_DENIED`로 차단되는 것을 확인했다.
+- 실제 KTX credential은 아직 등록하지 않으며 Phase 6 typed capability를
+  연결할 때 local hidden-input 명령으로 등록한다.
 
 ### Phase 6: Capability Broker와 첫 KTX 기능
 
@@ -620,23 +661,22 @@ BearHomeBot이 principal과 policy를 검증하고 Secret Broker가 credential�
 
 ## 9. 바로 다음 작업
 
-다음 구현 batch는 Phase 5의 Secret Broker 기반이다.
+다음 구현 batch는 Phase 6의 첫 typed KTX capability다.
 
-1. credential scope와 typed secret identifier를 정의한다.
-2. normal state와 분리된 encrypted vault schema를 만든다.
-3. repository와 vault 밖에 master key를 생성하고 owner와 mode를
-   검증한다.
-4. Unix domain socket을 사용하는 최소 Secret Broker API를 구현한다.
-5. caller와 Telegram principal을 구조화된 값으로 검증하고 사용자 간
-   credential 접근을 차단한다.
-6. 기존 `~/.config/k-skill/secrets.env`를 선택한 사용자 vault로 가져오는
-   local admin importer를 구현한다.
-7. Codex, log, exception, Telegram 응답에 secret이 노출되지 않는
-   integration test를 추가한다.
+1. active로 승격된 pinned `k-skill` release의 KTX helper interface를
+   확정한다.
+2. 공개 열차 검색과 credential이 필요한 로그인/예약 조회 operation을
+   별도 typed schema로 정의한다.
+3. 예약 생성과 취소에 single-use confirmation과 idempotency key를
+   적용하고 결제 operation을 구조적으로 금지한다.
+4. Secret Broker 내부 operation handler만 KTX ID와 password를 memory에서
+   복호화하고, pinned helper child의 최소 environment에 잠시 주입한다.
+5. helper output을 structured result로 검증하고 secret을 redaction한 뒤
+   Codex와 Telegram에는 비밀값 없는 결과만 전달한다.
 
-이 batch에서는 아직 KTX 예약을 실행하지 않는다. encrypted vault와
-credential 사용 경계가 완성된 뒤 Phase 6에서 첫 typed KTX capability를
-연결한다.
+현재 upstream 후보가 high vulnerability로 거부되어 active `k-skill`
+release가 비어 있으므로, Phase 6은 안전한 후보가 승격되기 전까지 실제
+예약을 실행하지 않고 fixture 기반 통합 test로 먼저 진행한다.
 
 ## 10. 참고 자료
 
@@ -655,5 +695,7 @@ credential 사용 경계가 완성된 뒤 Phase 6에서 첫 typed KTX capability
   `https://core.telegram.org/bots/api#inlinekeyboardbutton`
 - Ubuntu full-disk encryption:
   `https://documentation.ubuntu.com/security/security-features/storage/encryption-full-disk/`
+- Windows DPAPI `CryptProtectData`:
+  `https://learn.microsoft.com/en-us/windows/win32/api/dpapi/nf-dpapi-cryptprotectdata`
 - Linux process environment:
   `https://man7.org/linux/man-pages/man5/proc_pid_environ.5.html`
