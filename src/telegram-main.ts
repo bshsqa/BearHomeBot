@@ -1,4 +1,5 @@
 import { CodexRunner, prepareCodexWorkspace } from "./codex/runner.js";
+import { ActiveKSkillCatalog } from "./capability/catalog.js";
 import {
   ensureRuntimeDirectories,
   resolveRuntimePaths,
@@ -41,6 +42,7 @@ try {
     client,
     store,
     runner,
+    catalog: new ActiveKSkillCatalog(store),
   });
 
   await runTelegramBot(client, config, controller, abortController.signal);

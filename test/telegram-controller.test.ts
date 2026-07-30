@@ -181,6 +181,45 @@ test("creates a Codex thread and resumes it for the next message", async () => {
   }
 });
 
+test("answers capability catalog questions without invoking Codex", async () => {
+  const context = fixture();
+  context.controller = new TelegramController({
+    client: context.client,
+    store: context.store,
+    runner: context.runner,
+    catalog: {
+      listEnabled: () => [
+        {
+          skillId: "delivery-tracking",
+          category: "logistics",
+          description: "공식 택배 배송 상태를 조회한다.",
+        },
+        {
+          skillId: "ktx-booking",
+          category: "travel",
+          description: "KTX 열차와 예약 정보를 조회한다.",
+        },
+      ],
+    },
+  });
+  try {
+    await context.controller.handleUpdate(
+      message(1, "너 가능한 kskill 뭐 있어?"),
+      context.allowed,
+      context.service.signal,
+    );
+
+    assert.equal(context.runner.requests.length, 0);
+    assert.equal(context.store.getActiveSession("1001"), undefined);
+    assert.equal(context.client.messages.length, 1);
+    assert.match(context.client.messages[0]?.text ?? "", /2개/u);
+    assert.match(context.client.messages[0]?.text ?? "", /delivery-tracking/u);
+    assert.match(context.client.messages[0]?.text ?? "", /ktx-booking/u);
+  } finally {
+    context.store.close();
+  }
+});
+
 test("lists multiple sessions and switches through an owned callback", async () => {
   const context = fixture();
   try {

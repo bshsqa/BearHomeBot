@@ -3,13 +3,13 @@
 BearHomeBot은 승인된 Telegram 사용자의 요청을 Codex CLI와 검증된
 `k-skill` 실행으로 연결하는 Ubuntu 기반 홈 자동화 서비스입니다.
 
-현재 Telegram과 Codex CLI의 다중 세션 대화, 증분 `k-skill` 동작 검토
-updater, 사용자별 encrypted vault와 Secret Broker 기반이 구현되어
-있습니다. 다음 단계는 Telegram 자연어 요청에서 승인된 스킬을 고르는
-공통 Capability Broker입니다. 계정이 없는 스킬은 그대로 실행하고,
-계정이 필요한 사이트는 사용자별 provider 계정을 한 번 등록해 같은
-대화 방식으로 사용합니다. 모든 런타임 설정과 상태는 저장소 밖의 전용
-경로를 사용합니다.
+현재 Telegram과 Codex CLI의 다중 세션 대화, 활성 `k-skill` 기능 목록,
+증분 `k-skill` 동작 검토 updater, 사용자별 encrypted vault와 Secret
+Broker 기반이 구현되어 있습니다. 다음 단계는 Telegram 자연어 요청에서
+승인된 스킬을 실제로 실행하는 공통 Capability Broker입니다. 계정이 없는
+스킬은 그대로 실행하고, 계정이 필요한 사이트는 사용자별 provider 계정을
+한 번 등록해 같은 대화 방식으로 사용합니다. 모든 런타임 설정과 상태는
+저장소 밖의 전용 경로를 사용합니다.
 
 ## 기준 환경
 
@@ -116,9 +116,15 @@ Phase 8의 systemd service가 구현되기 전까지 이 process는 foreground�
 /renamesession <이름>    현재 대화 이름 변경
 /endsession              현재 대화에서 나오기
 /cancel                  진행 중인 Codex 응답 취소
+/skills                  사용 가능한 k-skill 목록
 /health                  Telegram gateway 상태 확인
 /whoami                  내 Telegram 숫자 사용자 ID 확인
 ```
+
+`/skills` 외에도 `너 가능한 kskill 뭐 있어?`, `k-skill 기능 리스트
+알려줘`처럼 자연어로 물을 수 있습니다. 이 응답은 Codex의 추측이 아니라
+현재 active release의 `enabledSkills`와 각 `SKILL.md` 설명으로 만듭니다.
+거부·보류된 스킬은 목록에 포함하지 않습니다.
 
 `/sessions`에서 `●`가 붙은 항목이 현재 세션입니다. 세션에서 나와도
 대화는 삭제되지 않으며 목록에서 다시 선택할 수 있습니다. 그룹, 채널,
@@ -249,6 +255,11 @@ active pointer 교체까지 수행합니다. 후보 코드나 test는 updater가
 않습니다. 이후 Capability Broker는 release 안에 파일이 있다는 이유만으로
 실행하지 않고 반드시 `enabledSkills`를 확인해야 합니다. 동시에 두
 updater가 실행되지 않도록 `flock`을 사용합니다.
+
+Telegram gateway는 active release에서 승인된 스킬 목록을 직접 읽어
+분야별 기능 설명을 제공합니다. 기능 목록 조회는 Codex를 호출하거나
+대화 session을 만들지 않습니다. 실제 스킬 helper 실행은 Capability
+Broker 연결이 끝난 스킬부터 단계적으로 지원합니다.
 
 전체 구현 순서는 [Ubuntu 구현 계획](docs/implementation-plan.md)을
 참고합니다. updater의 경계와 운영 절차는

@@ -44,6 +44,12 @@ LLM 검토를 반복하지 않는다.
 `enabledSkills`에 없는 스킬을 선택하거나 실행하지 않는다. 검토 중단처럼
 전체 결과가 불완전하거나 승인된 스킬이 하나도 없는 후보는 승격하지 않는다.
 
+Telegram의 기능 목록 응답도 같은 `enabledSkills`만 사용한다. active
+release의 각 `SKILL.md`에서 크기가 제한된 frontmatter 설명만 읽고,
+거부·보류된 스킬과 release 밖의 파일은 목록에 포함하지 않는다. 이 경로는
+Codex를 호출하지 않으므로 자연어 모델이 존재하지 않는 스킬을 추가하거나
+승인 목록을 누락하는 것을 방지한다.
+
 서비스 credential은 normal state와 분리된 encrypted vault에 저장한다.
 각 값은 AES-256-GCM으로 principal과 credential/version metadata에
 인증 결합되며, WSL2 host의 master key는 Windows DPAPI `CurrentUser`로

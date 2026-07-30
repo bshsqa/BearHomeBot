@@ -533,7 +533,7 @@ same Telegram private chat
 
 ### Phase 6: 대화형 Capability Broker
 
-상태: Phase 5 완료 후 시작
+상태: 활성 Capability Catalog 구현 완료, 실제 스킬 실행 연결 진행 전
 
 목표는 KTX 전용 기능을 구현하는 것이 아니라, 승인된 여러 스킬을 Telegram
 자연어로 사용할 수 있는 공통 실행 경로를 만드는 것이다. 계정이 필요 없는
@@ -544,6 +544,10 @@ Telegram 대화다. KTX는 로그인, 검색, 예약, 확인 정책을 함께 �
 
 작업:
 
+- Telegram의 `/skills`와 `k-skill` 기능 목록 자연어 질문은 active
+  release의 `enabledSkills`와 검토된 `SKILL.md` frontmatter를 직접 읽어
+  분야별 목록으로 응답한다. Codex 추측이나 대화 session을 사용하지 않고
+  제외된 스킬은 노출하지 않는다.
 - Codex가 Telegram 자연어 요청에 맞는 스킬과 action을 제안하게 하되,
   active release의 `enabledSkills` 안에서만 선택하게 한다.
 - Capability Broker가 trusted principal, pinned release SHA, 승인 스킬
@@ -733,9 +737,10 @@ BearHomeBot이 principal과 policy를 검증하고 Secret Broker가 credential�
 
 ## 9. 바로 다음 작업
 
-다음 구현 batch는 Phase 6의 공통 대화형 Capability Broker다.
+다음 구현 batch는 Phase 6의 공통 대화형 Capability Broker 실행 경로다.
 
-1. active release의 `enabledSkills`를 유일한 실행 allowlist로 연결한다.
+1. 구현된 Capability Catalog를 스킬 후보 선택 입력으로 사용하되
+   `enabledSkills`를 유일한 실행 allowlist로 유지한다.
 2. Telegram 자연어에서 제안된 스킬과 action을 trusted principal, pinned
    SHA, 공통 action policy에 맞춰 검증하는 구조화 요청 schema를 정의한다.
 3. 계정 없는 승인 스킬을 실행하는 최소 environment의 공통 runner를 만든다.

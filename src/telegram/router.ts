@@ -24,6 +24,9 @@ export type TelegramAction =
       callbackQueryId?: string;
     })
   | (TelegramActionBase & {
+      kind: "list_capabilities";
+    })
+  | (TelegramActionBase & {
       kind: "new_session";
       displayName?: string;
     })
@@ -65,6 +68,19 @@ function parseCommand(text: string): ParsedCommand | undefined {
     command.argument = argument;
   }
   return command;
+}
+
+function isCapabilityCatalogRequest(text: string): boolean {
+  const normalized = text.toLowerCase().replace(/\s+/gu, " ").trim();
+  const mentionsKSkill =
+    /(?:\bk[\s-]*skills?\b|케이\s*스킬|사용 가능한 스킬|활성화된 스킬)/u.test(
+      normalized,
+    );
+  const asksForList =
+    /(?:뭐|무엇|어떤|목록|리스트|가능한|가능해|할 수|보여|알려|있어)/u.test(
+      normalized,
+    );
+  return mentionsKSkill && asksForList;
 }
 
 export function telegramUpdateSenderId(
@@ -199,6 +215,9 @@ export function routeTelegramUpdate(
       text: "BearHomeBot Telegram 연결 정상. 이 응답은 Ubuntu PC에서 보냈어.",
     };
   }
+  if (command?.name === "skills") {
+    return { ...base, kind: "list_capabilities" };
+  }
   if (command?.name === "newsession") {
     const action: TelegramAction = { ...base, kind: "new_session" };
     if (command.argument) {
@@ -231,6 +250,9 @@ export function routeTelegramUpdate(
       kind: "reply",
       text: "지원하지 않는 명령이야. /sessions에서 사용 가능한 대화를 확인해줘.",
     };
+  }
+  if (isCapabilityCatalogRequest(message.text)) {
+    return { ...base, kind: "list_capabilities" };
   }
 
   return {
