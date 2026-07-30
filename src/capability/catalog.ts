@@ -189,6 +189,12 @@ function readSkillMetadata(
 
 export class ActiveKSkillCatalog implements CapabilityCatalogLike {
   readonly #store: StateStore;
+  #cache:
+    | {
+        key: string;
+        entries: CapabilityCatalogEntry[];
+      }
+    | undefined;
 
   constructor(store: StateStore) {
     this.#store = store;
@@ -207,13 +213,17 @@ export class ActiveKSkillCatalog implements CapabilityCatalogLike {
     ) {
       throw new Error("Active k-skill release is unavailable");
     }
+    const cacheKey = `${release.sha}:${release.updatedAt}:${release.releasePath}`;
+    if (this.#cache?.key === cacheKey) {
+      return this.#cache.entries.map((entry) => ({ ...entry }));
+    }
     const releaseRoot = realpathSync(release.releasePath);
     const rootStat = lstatSync(releaseRoot);
     if (!rootStat.isDirectory() || rootStat.isSymbolicLink()) {
       throw new Error("Active k-skill release path is unsafe");
     }
     const review = parseReview(release.review);
-    return review.enabledSkills
+    const entries = review.enabledSkills
       .map((skillId) => {
         const metadata = readSkillMetadata(releaseRoot, skillId);
         return {
@@ -230,7 +240,76 @@ export class ActiveKSkillCatalog implements CapabilityCatalogLike {
           left.category.localeCompare(right.category, "en") ||
           left.skillId.localeCompare(right.skillId, "en"),
       );
+    this.#cache = {
+      key: cacheKey,
+      entries,
+    };
+    return entries.map((entry) => ({ ...entry }));
   }
+}
+
+const QUERY_STOP_WORDS = new Set([
+  "kskill",
+  "skill",
+  "k",
+  "기능",
+  "스킬",
+  "있는",
+  "있어",
+  "가능한",
+  "가능해",
+  "참고해서",
+  "알려줘",
+  "해줘",
+]);
+
+export function findRelevantCapabilities(
+  entries: readonly CapabilityCatalogEntry[],
+  query: string,
+  limit = 5,
+): CapabilityCatalogEntry[] {
+  const normalizedQuery = query
+    .toLowerCase()
+    .replace(/k[\s-]+skill/gu, "kskill");
+  const queryTokens = [
+    ...new Set(
+      normalizedQuery
+        .match(/[a-z0-9]{2,}|[가-힣]{2,}/gu)
+        ?.filter((token) => !QUERY_STOP_WORDS.has(token)) ?? [],
+    ),
+  ];
+  if (queryTokens.length === 0) {
+    return [];
+  }
+  const scored = entries
+    .map((entry) => {
+      const skillId = entry.skillId.toLowerCase();
+      const description = entry.description.toLowerCase();
+      const category = entry.category.toLowerCase();
+      let score = normalizedQuery.includes(skillId) ? 100 : 0;
+      for (const token of queryTokens) {
+        if (skillId.includes(token)) {
+          score += 20;
+        } else if (description.includes(token)) {
+          score += 5;
+        } else if (category.includes(token)) {
+          score += 2;
+        }
+      }
+      return { entry, score };
+    })
+    .filter((candidate) => candidate.score > 0)
+    .sort(
+      (left, right) =>
+        right.score - left.score ||
+        left.entry.skillId.localeCompare(right.entry.skillId, "en"),
+    );
+  const bestScore = scored[0]?.score ?? 0;
+  const minimumScore = bestScore >= 20 ? Math.ceil(bestScore / 2) : 1;
+  return scored
+    .filter((candidate) => candidate.score >= minimumScore)
+    .slice(0, Math.max(0, limit))
+    .map(({ entry }) => ({ ...entry }));
 }
 
 export function formatCapabilityCatalog(

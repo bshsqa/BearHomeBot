@@ -50,6 +50,11 @@ release의 각 `SKILL.md`에서 크기가 제한된 frontmatter 설명만 읽고
 Codex를 호출하지 않으므로 자연어 모델이 존재하지 않는 스킬을 추가하거나
 승인 목록을 누락하는 것을 방지한다.
 
+특정 기능 질문을 Codex에 전달할 때도 전체 catalog를 넣지 않는다. 질문
+문자열과 일치하는 승인 항목을 최대 5개로 제한하고, frontmatter 설명은
+실행 지시가 아닌 비신뢰 데이터로 구분한다. 이 문맥은 기능 설명용일 뿐
+스킬 실행 권한이나 credential 접근 권한을 부여하지 않는다.
+
 서비스 credential은 normal state와 분리된 encrypted vault에 저장한다.
 각 값은 AES-256-GCM으로 principal과 credential/version metadata에
 인증 결합되며, WSL2 host의 master key는 Windows DPAPI `CurrentUser`로

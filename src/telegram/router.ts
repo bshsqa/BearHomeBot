@@ -77,7 +77,8 @@ function isCapabilityCatalogRequest(text: string): boolean {
       normalized,
     );
   const asksForList =
-    /(?:뭐|무엇|어떤|목록|리스트|가능한|가능해|할 수|보여|알려|있어)/u.test(
+    /(?:목록|리스트|전체|전부|쭉|나열)/u.test(normalized) ||
+    /(?:뭐[^?!.]{0,30}(?:있|가능|할 수)|무엇|어떤\s+(?:기능|스킬)|무슨\s+(?:기능|스킬))/u.test(
       normalized,
     );
   return mentionsKSkill && asksForList;

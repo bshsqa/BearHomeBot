@@ -548,6 +548,9 @@ Telegram 대화다. KTX는 로그인, 검색, 예약, 확인 정책을 함께 �
   release의 `enabledSkills`와 검토된 `SKILL.md` frontmatter를 직접 읽어
   분야별 목록으로 응답한다. Codex 추측이나 대화 session을 사용하지 않고
   제외된 스킬은 노출하지 않는다.
+- 특정 스킬의 가능 여부를 묻는 문장은 전체 목록으로 가로채지 않는다.
+  질문과 관련된 승인 스킬을 최대 5개로 좁혀 설명만 Codex 문맥에 넣고,
+  스킬이 기술한 기능과 현재 실제 실행 연결 여부를 구분해 답하게 한다.
 - Codex가 Telegram 자연어 요청에 맞는 스킬과 action을 제안하게 하되,
   active release의 `enabledSkills` 안에서만 선택하게 한다.
 - Capability Broker가 trusted principal, pinned release SHA, 승인 스킬

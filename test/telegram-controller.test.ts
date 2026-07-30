@@ -220,6 +220,51 @@ test("answers capability catalog questions without invoking Codex", async () => 
   }
 });
 
+test("gives Codex only the relevant skill context for a capability question", async () => {
+  const context = fixture();
+  context.controller = new TelegramController({
+    client: context.client,
+    store: context.store,
+    runner: context.runner,
+    catalog: {
+      listEnabled: () => [
+        {
+          skillId: "delivery-tracking",
+          category: "logistics",
+          description: "공식 택배 배송 상태를 조회한다.",
+        },
+        {
+          skillId: "ktx-booking",
+          category: "travel",
+          description: "KTX 열차와 예약 정보를 조회한다.",
+        },
+      ],
+    },
+  });
+  try {
+    await context.controller.handleUpdate(
+      message(
+        1,
+        "k skill에 있는 ktx 예약 스킬을 참고해서 ktx 조회와 예약이 가능해?",
+      ),
+      context.allowed,
+      context.service.signal,
+    );
+
+    assert.equal(context.runner.requests.length, 1);
+    const prompt = context.runner.requests[0]?.prompt ?? "";
+    assert.match(prompt, /<reviewed_kskill_context>/u);
+    assert.match(prompt, /ktx-booking/u);
+    assert.doesNotMatch(prompt, /delivery-tracking/u);
+    assert.match(
+      context.client.messages.at(-1)?.text ?? "",
+      /ktx 조회와 예약이 가능해/u,
+    );
+  } finally {
+    context.store.close();
+  }
+});
+
 test("lists multiple sessions and switches through an owned callback", async () => {
   const context = fixture();
   try {

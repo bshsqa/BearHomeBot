@@ -6,6 +6,7 @@ import test from "node:test";
 
 import {
   ActiveKSkillCatalog,
+  findRelevantCapabilities,
   formatCapabilityCatalog,
 } from "../src/capability/catalog.js";
 import { StateStore } from "../src/state/store.js";
@@ -80,5 +81,38 @@ test("returns a stable empty catalog message", () => {
   assert.equal(
     formatCapabilityCatalog([]),
     "현재 활성화된 k-skill 목록이 없어.",
+  );
+});
+
+test("selects only relevant catalog entries for a capability question", () => {
+  const entries = [
+    {
+      skillId: "delivery-tracking",
+      category: "logistics",
+      description: "택배 배송 상태를 조회한다.",
+    },
+    {
+      skillId: "ktx-booking",
+      category: "travel",
+      description: "KTX 열차와 예약 정보를 조회한다.",
+    },
+    {
+      skillId: "korea-weather",
+      category: "weather",
+      description: "한국 날씨를 조회한다.",
+    },
+    {
+      skillId: "myrealtrip-search",
+      category: "travel",
+      description: "항공권과 숙소를 검색하고 예약 링크를 확인한다.",
+    },
+  ];
+
+  assert.deepEqual(
+    findRelevantCapabilities(
+      entries,
+      "k skill에 있는 ktx 예약 스킬로 조회와 예약이 가능해?",
+    ),
+    [entries[1]],
   );
 });

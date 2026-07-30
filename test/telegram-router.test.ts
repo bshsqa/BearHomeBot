@@ -99,6 +99,17 @@ test("routes natural-language and command capability catalog requests", () => {
   }
 });
 
+test("does not mistake a specific skill capability question for a full list", () => {
+  const action = routeTelegramUpdate(
+    privateMessage(
+      "k skill에 있는 ktx 예약 스킬을 참고해서 ktx 조회와 예약이 가능해?",
+    ),
+    new Set(["1001"]),
+  );
+
+  assert.equal(action?.kind, "prompt");
+});
+
 test("parses lowercase session commands and optional names", () => {
   assert.deepEqual(
     routeTelegramUpdate(
