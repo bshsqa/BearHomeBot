@@ -155,6 +155,15 @@ root가 관리하는 systemd credential 또는 동등한 전용 secret 경로에
   정책을 정한다.
 - log 보존 기간, backup 범위, 장애 알림 대상을 정한다.
 
+현재 운영 결정:
+
+- Windows/WSL2 host의 Device Encryption 또는 native Ubuntu의 LUKS는
+  권장하지만 BearHomeBot의 비-credential 기능을 시작하기 위한 필수 조건은
+  아니다. 현재 공유 WSL2 PC는 host disk encryption 없이 먼저 운영한다.
+- host disk encryption이 없어도 credential 평문 저장은 허용하지 않는다.
+  Phase 5의 승인된 key provider로 vault를 열기 전까지 credential 기능은
+  fail-closed 상태로 유지한다.
+
 완료 조건:
 
 - 결정 사항이 configuration 또는 ADR로 저장된다.
@@ -406,6 +415,11 @@ same Telegram private chat
 - secret value마다 AES-256-GCM 또는 XChaCha20-Poly1305 같은 authenticated
   encryption을 적용한다.
 - master key를 repository와 vault database 밖에 생성한다.
+- master key provider를 수동 passphrase, Windows DPAPI, native Ubuntu의
+  TPM/systemd credential처럼 host별로 선택할 수 있게 분리한다.
+- key provider가 설정되지 않았거나 vault가 잠겨 있으면 일반 대화와 공개
+  조회만 허용하고 credential operation은 fail-closed로 거부한다.
+- master key를 vault 옆의 평문 파일에 저장하는 provider는 지원하지 않는다.
 - key versioning과 credential rotation을 지원한다.
 - dedicated service account가 vault와 master key를 소유하게 한다.
 - allowlisted typed operation만 받는 Unix domain socket API를 만든다.

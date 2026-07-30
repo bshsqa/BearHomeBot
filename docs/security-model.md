@@ -45,9 +45,12 @@ candidate path escape, submodule과 symlink, 비정상 history, 과도한 tree,
 
 다음 항목은 운영 host 단계에서 추가로 필요하다.
 
-- LUKS full-disk encryption
+- Windows Device Encryption/BitLocker 또는 Linux LUKS full-disk encryption
+  적용을 권장한다. 적용하지 않은 host에서도 credential vault의 평문 저장은
+  허용하지 않으며 승인된 key provider가 없으면 credential 기능을 잠근다.
 - gateway, Codex, updater, Secret Broker의 Unix account 분리
-- TPM 또는 root-owned systemd credential에 vault master key 보관
+- 수동 passphrase, Windows DPAPI, TPM 또는 root-owned systemd credential
+  중 host에 맞는 provider로 vault master key를 보관
 - provider별 egress allowlist
 - encrypted backup과 restore drill
 - systemd hardening과 보안 update
