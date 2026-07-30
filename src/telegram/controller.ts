@@ -326,7 +326,7 @@ export class TelegramController {
 
     await this.#client.sendMessage(
       action.chatId,
-      `내 세션 ${total}개 (${page + 1}/${totalPages})\n● 표시가 현재 세션이야.`,
+      `내 세션: ${total}개\n페이지: ${page + 1}/${totalPages}\n● 표시가 현재 세션이야.`,
       {
         signal,
         replyMarkup: { inline_keyboard: rows },

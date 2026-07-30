@@ -204,6 +204,10 @@ test("lists multiple sessions and switches through an owned callback", async () 
     const keyboard = context.client.messages.at(-1)?.replyMarkup;
     assert.ok(keyboard);
     assert.equal(keyboard.inline_keyboard.length, 2);
+    assert.equal(
+      context.client.messages.at(-1)?.text,
+      "내 세션: 2개\n페이지: 1/1\n● 표시가 현재 세션이야.",
+    );
 
     await context.controller.handleUpdate(
       callback(4, `session:${first?.id}`),
