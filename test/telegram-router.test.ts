@@ -1,7 +1,10 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { routeTelegramUpdate } from "../src/telegram/router.js";
+import {
+  routeTelegramUpdate,
+  telegramUpdateSenderId,
+} from "../src/telegram/router.js";
 import type { TelegramUpdate } from "../src/telegram/types.js";
 
 function privateMessage(text: string, userId = 1001): TelegramUpdate {
@@ -23,29 +26,118 @@ function privateMessage(text: string, userId = 1001): TelegramUpdate {
   };
 }
 
-test("reveals only the sender's numeric ID before approval", () => {
-  const reply = routeTelegramUpdate(privateMessage("/whoami"), new Set());
+function sessionCallback(data: string, userId = 1001): TelegramUpdate {
+  return {
+    update_id: 11,
+    callback_query: {
+      id: "callback-1",
+      from: {
+        id: userId,
+        is_bot: false,
+        first_name: "Tester",
+      },
+      message: {
+        message_id: 21,
+        chat: {
+          id: userId,
+          type: "private",
+        },
+        text: "세션 목록",
+      },
+      data,
+    },
+  };
+}
 
-  assert.equal(reply?.chatId, 1001);
-  assert.match(reply?.text ?? "", /Telegram user ID: 1001/);
-  assert.match(reply?.text ?? "", /승인 전/);
+test("reveals only the sender's numeric ID before approval", () => {
+  const action = routeTelegramUpdate(privateMessage("/whoami"), new Set());
+
+  assert.equal(action?.kind, "reply");
+  assert.equal(action?.chatId, 1001);
+  if (action?.kind === "reply") {
+    assert.match(action.text, /Telegram user ID: 1001/);
+    assert.match(action.text, /승인 전/);
+  }
 });
 
 test("blocks ordinary messages from users outside the allowlist", () => {
-  const reply = routeTelegramUpdate(privateMessage("안녕"), new Set());
+  const action = routeTelegramUpdate(privateMessage("안녕"), new Set());
 
-  assert.match(reply?.text ?? "", /승인되지 않은 사용자/);
-  assert.doesNotMatch(reply?.text ?? "", /안녕/);
+  assert.equal(action?.kind, "reply");
+  if (action?.kind === "reply") {
+    assert.match(action.text, /승인되지 않은 사용자/);
+    assert.doesNotMatch(action.text, /안녕/);
+  }
 });
 
-test("acknowledges messages from an allowed user", () => {
-  const reply = routeTelegramUpdate(
+test("routes allowed text to a Codex prompt", () => {
+  const action = routeTelegramUpdate(
     privateMessage("안녕 BearHomeBot"),
     new Set(["1001"]),
   );
 
-  assert.match(reply?.text ?? "", /Ubuntu BearHomeBot이 메시지를 받았어/);
-  assert.match(reply?.text ?? "", /안녕 BearHomeBot/);
+  assert.deepEqual(action, {
+    kind: "prompt",
+    updateId: 10,
+    userId: "1001",
+    chatId: 1001,
+    text: "안녕 BearHomeBot",
+  });
+});
+
+test("parses lowercase session commands and optional names", () => {
+  assert.deepEqual(
+    routeTelegramUpdate(
+      privateMessage("/newsession 여행 계획"),
+      new Set(["1001"]),
+    ),
+    {
+      kind: "new_session",
+      updateId: 10,
+      userId: "1001",
+      chatId: 1001,
+      displayName: "여행 계획",
+    },
+  );
+  assert.equal(
+    routeTelegramUpdate(privateMessage("/sessions"), new Set(["1001"]))?.kind,
+    "list_sessions",
+  );
+  assert.equal(
+    routeTelegramUpdate(privateMessage("세션 종료해"), new Set(["1001"]))?.kind,
+    "end_session",
+  );
+});
+
+test("routes owned-looking callback data as an untrusted session selection", () => {
+  const action = routeTelegramUpdate(
+    sessionCallback("session:42"),
+    new Set(["1001"]),
+  );
+
+  assert.deepEqual(action, {
+    kind: "select_session",
+    updateId: 11,
+    userId: "1001",
+    chatId: 1001,
+    callbackQueryId: "callback-1",
+    sessionId: 42,
+  });
+  assert.equal(telegramUpdateSenderId(sessionCallback("session:42")), "1001");
+});
+
+test("rejects malformed and unauthorized callbacks", () => {
+  assert.equal(
+    routeTelegramUpdate(
+      sessionCallback("session:../../secret"),
+      new Set(["1001"]),
+    )?.kind,
+    "answer_callback",
+  );
+  assert.equal(
+    routeTelegramUpdate(sessionCallback("session:42"), new Set())?.kind,
+    "answer_callback",
+  );
 });
 
 test("ignores group messages", () => {

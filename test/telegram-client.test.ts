@@ -23,8 +23,31 @@ test("sends long-polling requests with a bounded Telegram payload", async () => 
   assert.deepEqual(JSON.parse(String(capturedInit?.body)), {
     timeout: 25,
     limit: 100,
-    allowed_updates: ["message"],
+    allowed_updates: ["message", "callback_query"],
     offset: 42,
+  });
+});
+
+test("sends inline keyboards without adding a parse mode", async () => {
+  let payload: Record<string, unknown> | undefined;
+  const fetchImplementation: typeof fetch = async (_input, init) => {
+    payload = JSON.parse(String(init?.body)) as Record<string, unknown>;
+    return Response.json({ ok: true, result: {} });
+  };
+  const client = new TelegramClient(token, fetchImplementation);
+
+  await client.sendMessage(1001, "세션", {
+    replyMarkup: {
+      inline_keyboard: [[{ text: "여행", callback_data: "session:1" }]],
+    },
+  });
+
+  assert.deepEqual(payload, {
+    chat_id: 1001,
+    text: "세션",
+    reply_markup: {
+      inline_keyboard: [[{ text: "여행", callback_data: "session:1" }]],
+    },
   });
 });
 

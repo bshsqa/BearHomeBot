@@ -186,7 +186,7 @@ root가 관리하는 systemd credential 또는 동등한 전용 secret 경로에
 
 ### Phase 2: Telegram 보안 전송 기반
 
-상태: bootstrap 완료
+상태: 완료
 
 구현 내용:
 
@@ -209,20 +209,14 @@ npm run build
 ./scripts/start-telegram.sh
 ```
 
-Codex 연결 전에 유지할 동작:
+유지되는 보안 경계:
 
 - `/whoami`, `/health`, `/start` 같은 gateway command는 Codex를 호출하지
   않는다.
 - 승인된 일반 text만 Codex queue로 전달한다.
 - bot token은 Codex process environment에서 제거한다.
-
-운영 전 추가할 항목:
-
-- Telegram `update_id` checkpoint를 SQLite에 저장한다.
-- replay와 중복 update를 idempotency key로 차단한다.
-- request 크기와 사용자별 rate limit을 적용한다.
-- bootstrap allowlist를 SQLite principal model로 이전한다.
-- bot token을 systemd credential로 이전한다.
+- Telegram `update_id` checkpoint를 SQLite에 저장하고 replay를 차단한다.
+- bootstrap allowlist를 SQLite principal model로 import한다.
 
 완료 조건:
 
@@ -232,7 +226,7 @@ Codex 연결 전에 유지할 동작:
 
 ### Phase 3: Telegram-Codex 대화 연결
 
-상태: 다음 구현 단계
+상태: 완료
 
 목표:
 
@@ -255,12 +249,13 @@ Codex 연결 전에 유지할 동작:
 - 사용자가 명시적으로 새 session을 만들고, 이전 session을 선택하고,
   현재 session을 종료한다.
 
-작업:
+구현 내용:
 
-- `users`, `telegram_identities`, `codex_sessions`, `turns`,
-  `telegram_updates`, `audit_events` SQLite migration을 만든다.
-- 기존 bootstrap allowlist를 초기 admin principal로 안전하게 import한다.
-- 사용자별 여러 `codex_sessions`와 하나의 `active_session_id`를 저장한다.
+- `users`, `codex_sessions`, `turns`, `telegram_updates`, `audit_events`
+  SQLite schema와 migration을 구현했다.
+- 기존 bootstrap allowlist를 최초 admin과 이후 member principal로
+  안전하게 import한다.
+- 사용자별 여러 `codex_sessions`와 하나의 active session을 저장한다.
 - active session에 thread ID가 없으면 첫 일반 메시지를
   `codex exec --json`으로 시작하고
   `thread.started.thread_id`를 저장한다.
@@ -293,15 +288,15 @@ Codex 연결 전에 유지할 동작:
   서비스 credential을 제외한다.
 - JSONL parser가 `thread.started`, final agent message, failure, usage만
   구조화해서 처리하게 한다.
-- Codex 자동 compaction을 위한 model 기본값을 유지하고, 지원되는 JSONL
-  event가 있으면 compaction 발생 metadata만 기록한다.
+- Codex 자동 compaction을 위한 model 기본값을 유지하고 BearHomeBot은
+  transcript 원문을 별도로 복제하지 않는다.
 - 첫 버전에서는 세부 tool log를 Telegram에 보내지 않고, 처리 시작 알림과
   최종 답변만 보낸다.
 - Telegram 길이 제한에 맞춰 최종 답변을 안전하게 분할한다.
 - 같은 사용자의 동시 turn을 막고, 전역 Codex 동시 실행 수를 2로 제한한다.
 - `/cancel`로 실행 중인 Codex child를 종료하고 상태를 기록한다.
-- Codex authentication과 quota 오류를 사용자용 메시지와 운영 log로
-  분리한다.
+- Codex process 상세 오류는 Telegram에 노출하지 않고 안정된 failure
+  code와 일반 사용자 메시지로 분리한다.
 
 안전한 첫 수직 기능:
 
@@ -341,7 +336,7 @@ same Telegram private chat
 
 ### Phase 4: 안전한 k-skill 공급망
 
-상태: Phase 3 완료 후 시작
+상태: 다음 구현 단계
 
 작업:
 
@@ -579,22 +574,22 @@ BearHomeBot이 principal과 policy를 검증하고 Secret Broker가 credential�
 
 ## 9. 바로 다음 작업
 
-다음 구현 batch는 Phase 3의 최소 수직 기능이다.
+다음 구현 batch는 Phase 4의 read-only 공급망 기반이다.
 
-1. SQLite migration과 Telegram principal import를 만든다.
-2. 사용자별 다중 session repository와 active association을 구현한다.
-3. shell을 사용하지 않는 `CodexRunner`와 JSONL parser를 만든다.
-4. `/newsession`, `/sessions`, inline session 선택, `/renamesession`,
-   `/endsession`을 구현한다.
-5. 일반 Telegram text의 echo 응답을 active Codex thread의 최종 답변으로
-   교체한다.
-6. timeout, cancellation, token 격리, session 소유권, restart resume,
-   callback 위조 방지 test를 추가한다.
-7. 실제 휴대폰에서 연속 대화, 다중 session 생성, 전환, 복귀를 검증한다.
+1. 허용 `k-skill` upstream URL과 branch를 version-controlled 설정으로
+   고정한다.
+2. Git checkout 밖에 bare mirror와 commit SHA별 release 경로를 만든다.
+3. fetch한 후보의 remote, branch, history, submodule, 경로, 파일 크기를
+   deterministic gate로 검사한다.
+4. 현재 active SHA, candidate SHA, gate 결과를 SQLite에 기록한다.
+5. secret과 network를 제공하지 않는 격리 환경에서 `npm run ci`와
+   BearHomeBot contract test를 실행한다.
+6. 모든 필수 gate를 통과한 후보만 원자적으로 active release로 승격하고
+   실패 시 기존 release를 유지한다.
+7. updater 단위 테스트와 실제 upstream read-only smoke test를 수행한다.
 
-이 batch에서는 `k-skill`, Korail credential, 예약 실행을 다루지 않는다.
-완료 후 Phase 4의 read-only upstream SHA 확인과 release model 구현으로
-이동한다.
+이 batch에서는 Korail credential과 예약 실행을 다루지 않는다. 검증된
+release 공급망이 완성된 뒤 Phase 5의 Secret Broker로 이동한다.
 
 ## 10. 참고 자료
 

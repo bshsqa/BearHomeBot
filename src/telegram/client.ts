@@ -1,4 +1,6 @@
 import type {
+  TelegramBotCommand,
+  TelegramInlineKeyboardMarkup,
   TelegramUpdate,
   TelegramUser,
   TelegramWebhookInfo,
@@ -103,7 +105,7 @@ export class TelegramClient {
     const payload: Record<string, unknown> = {
       timeout: timeoutSeconds,
       limit: 100,
-      allowed_updates: ["message"],
+      allowed_updates: ["message", "callback_query"],
     };
     if (offset !== undefined) {
       payload.offset = offset;
@@ -115,15 +117,41 @@ export class TelegramClient {
   async sendMessage(
     chatId: number,
     text: string,
+    options: {
+      replyMarkup?: TelegramInlineKeyboardMarkup;
+      signal?: AbortSignal;
+    } = {},
+  ): Promise<void> {
+    const payload: Record<string, unknown> = {
+      chat_id: chatId,
+      text,
+    };
+    if (options.replyMarkup) {
+      payload.reply_markup = options.replyMarkup;
+    }
+
+    await this.#request("sendMessage", payload, options.signal);
+  }
+
+  async answerCallbackQuery(
+    callbackQueryId: string,
+    text: string,
     signal?: AbortSignal,
   ): Promise<void> {
     await this.#request(
-      "sendMessage",
+      "answerCallbackQuery",
       {
-        chat_id: chatId,
+        callback_query_id: callbackQueryId,
         text,
       },
       signal,
     );
+  }
+
+  async setMyCommands(
+    commands: TelegramBotCommand[],
+    signal?: AbortSignal,
+  ): Promise<void> {
+    await this.#request("setMyCommands", { commands }, signal);
   }
 }

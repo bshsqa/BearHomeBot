@@ -3,9 +3,9 @@
 BearHomeBot은 승인된 Telegram 사용자의 요청을 Codex CLI와 검증된
 `k-skill` 실행으로 연결하는 Ubuntu 기반 홈 자동화 서비스입니다.
 
-현재 단계에서는 Telegram과 Ubuntu PC 사이의 전송 경로만 테스트합니다.
-Codex, `k-skill`, 사용자별 서비스 계정은 아직 연결하지 않았으며, 모든
-런타임 설정은 저장소 밖의 전용 경로를 사용합니다.
+현재 Telegram과 Codex CLI의 다중 세션 대화가 연결되어 있습니다.
+`k-skill`과 사용자별 서비스 계정은 아직 연결하지 않았으며, 모든 런타임
+설정과 상태는 저장소 밖의 전용 경로를 사용합니다.
 
 ## 기준 환경
 
@@ -44,11 +44,14 @@ Node.js 24는 프로젝트 루트의 `.nvmrc`에 고정되어 있습니다.
 ./scripts/start.sh --health
 ```
 
-## Telegram 연결 테스트
+## Telegram-Codex 실행
 
-현재 Telegram 기능은 Codex나 `k-skill`을 호출하지 않는 전송 경로
-테스트입니다. private chat에서 사용자 ID와 health를 확인하고, 승인된
-사용자의 일반 텍스트를 Ubuntu PC가 수신했음을 응답합니다.
+먼저 이 PC의 Codex CLI 로그인을 완료하고 상태를 확인합니다.
+
+```bash
+codex login
+codex login status
+```
 
 1. Telegram의 공식 `@BotFather`에게 `/newbot`을 보내 봇을 만들고 토큰을
    발급받습니다.
@@ -68,8 +71,25 @@ npm run build
 ./scripts/start-telegram.sh
 ```
 
-승인된 뒤에는 `/health`와 일반 텍스트 메시지에 응답합니다. 그룹,
-채널, 사진, 파일은 이 단계에서 처리하지 않습니다.
+승인된 사용자의 일반 텍스트는 현재 Codex 세션으로 전달됩니다. 선택된
+세션이 없다면 `새 대화 YYYY-MM-DD HH:mm` 이름의 세션을 자동으로 만들며,
+이 세션도 `/sessions`에 보존됩니다.
+
+지원하는 명령은 다음과 같습니다.
+
+```text
+/newsession [이름]       새 Codex 대화를 만들고 선택
+/sessions                내 대화 목록과 전환 버튼 표시
+/renamesession <이름>    현재 대화 이름 변경
+/endsession              현재 대화에서 나오기
+/cancel                  진행 중인 Codex 응답 취소
+/health                  Telegram gateway 상태 확인
+/whoami                  내 Telegram 숫자 사용자 ID 확인
+```
+
+`/sessions`에서 `●`가 붙은 항목이 현재 세션입니다. 세션에서 나와도
+대화는 삭제되지 않으며 목록에서 다시 선택할 수 있습니다. 그룹, 채널,
+사진, 파일은 처리하지 않습니다.
 
 Telegram 토큰은 임시 bootstrap 저장소인
 `~/.config/bearhomebot/telegram.env`에 mode `0600`으로 저장됩니다.
@@ -96,13 +116,23 @@ BearHomeBot은 실제 운영 상태를 Git checkout에 저장하지 않습니다
 ~/.cache/bearhomebot
 ```
 
+`XDG_CONFIG_HOME`, `XDG_DATA_HOME`, `XDG_CACHE_HOME`이 설정된 환경에서는
+각 XDG base 아래의 `bearhomebot/`을 사용합니다. 운영 서비스에서는
+`BEARHOMEBOT_CONFIG_DIR`, `BEARHOMEBOT_DATA_DIR`,
+`BEARHOMEBOT_CACHE_DIR`를 절대 경로로 고정해 실행 환경에 따른 차이를
+없앱니다.
+
+SQLite에는 Telegram 사용자, 세션 소유권, Codex thread ID, 표시 이름,
+시각, turn 결과 metadata만 저장합니다. 사용자 prompt와 Codex 답변
+원문은 복제해 저장하지 않습니다. Codex thread의 대화 문맥과 자동
+compaction은 Codex가 관리합니다.
+
 개발용 임시 상태는 Git에서 제외된 `.runtime/`만 사용할 수 있습니다.
 실제 사용자 비밀정보는 아직 지원하지 않으며, Secret Broker가 구현되기
 전에는 이 프로젝트에 입력하지 않습니다.
 
-Telegram 전송 테스트에 한해 봇 토큰을 별도의 `0600` 로컬 파일에
-보관합니다. 이 토큰은 Codex 프로세스나 Git checkout에 전달되지
-않습니다.
+Telegram bot token은 별도의 `0600` 로컬 파일에 보관하며 Codex
+프로세스나 Git checkout에 전달되지 않습니다.
 
 ## k-skill
 

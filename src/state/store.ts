@@ -197,6 +197,11 @@ export class StateStore {
     return row ? rowToSession(row) : undefined;
   }
 
+  getSession(telegramUserId: string, sessionId: number): CodexSession {
+    const user = this.#requireEnabledUser(telegramUserId);
+    return this.#requireOwnedSession(user.id, sessionId);
+  }
+
   listSessions(telegramUserId: string, limit = 10, offset = 0): CodexSession[] {
     const user = this.#requireEnabledUser(telegramUserId);
     const boundedLimit = Math.max(1, Math.min(Math.trunc(limit), 25));

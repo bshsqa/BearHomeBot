@@ -2,6 +2,7 @@ export interface TelegramConfig {
   token: string;
   allowedUserIds: ReadonlySet<string>;
   pollTimeoutSeconds: number;
+  codexTimeoutMilliseconds: number;
 }
 
 const TOKEN_PATTERN = /^\d+:[A-Za-z0-9_-]{20,}$/;
@@ -49,11 +50,24 @@ export function loadTelegramConfig(
     );
   }
 
+  const codexTimeoutText = env.BEARHOMEBOT_CODEX_TIMEOUT_SECONDS ?? "300";
+  const codexTimeoutSeconds = Number.parseInt(codexTimeoutText, 10);
+  if (
+    !Number.isSafeInteger(codexTimeoutSeconds) ||
+    codexTimeoutSeconds < 10 ||
+    codexTimeoutSeconds > 900
+  ) {
+    throw new Error(
+      "BEARHOMEBOT_CODEX_TIMEOUT_SECONDS must be an integer from 10 to 900",
+    );
+  }
+
   return {
     token,
     allowedUserIds: parseAllowedUserIds(
       env.BEARHOMEBOT_TELEGRAM_ALLOWED_USER_IDS,
     ),
     pollTimeoutSeconds,
+    codexTimeoutMilliseconds: codexTimeoutSeconds * 1_000,
   };
 }

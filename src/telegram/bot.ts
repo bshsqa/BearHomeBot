@@ -2,13 +2,14 @@ import { setTimeout as delay } from "node:timers/promises";
 
 import { TelegramClient } from "./client.js";
 import type { TelegramConfig } from "./config.js";
-import { routeTelegramUpdate } from "./router.js";
+import { BEARHOMEBOT_COMMANDS, TelegramController } from "./controller.js";
 
 const RETRY_DELAY_MILLISECONDS = 1_000;
 
 export async function runTelegramBot(
   client: TelegramClient,
   config: TelegramConfig,
+  controller: TelegramController,
   signal: AbortSignal,
 ): Promise<void> {
   const bot = await client.getMe(signal);
@@ -20,12 +21,15 @@ export async function runTelegramBot(
     );
   }
 
+  await client.setMyCommands(BEARHOMEBOT_COMMANDS, signal);
+
   const botName = bot.username ? `@${bot.username}` : bot.first_name;
   process.stdout.write(
     `BearHomeBot Telegram gateway started as ${botName}; ${config.allowedUserIds.size} user(s) allowed.\n`,
   );
 
-  let offset: number | undefined;
+  let offset = controller.getInitialOffset();
+  const pending = new Set<Promise<void>>();
 
   while (!signal.aborted) {
     try {
@@ -36,15 +40,21 @@ export async function runTelegramBot(
       );
 
       for (const update of updates) {
-        const reply = routeTelegramUpdate(update, config.allowedUserIds);
-        if (reply) {
-          await client.sendMessage(reply.chatId, reply.text, signal);
-        }
+        const task = controller.handleUpdate(
+          update,
+          config.allowedUserIds,
+          signal,
+        );
+        pending.add(task);
+        const remove = (): void => {
+          pending.delete(task);
+        };
+        void task.then(remove, remove);
         offset = update.update_id + 1;
       }
     } catch (error) {
       if (signal.aborted) {
-        return;
+        break;
       }
 
       const message =
@@ -55,4 +65,7 @@ export async function runTelegramBot(
       );
     }
   }
+
+  await Promise.allSettled([...pending]);
+  await controller.drain();
 }
