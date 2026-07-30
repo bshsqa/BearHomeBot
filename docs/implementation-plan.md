@@ -19,6 +19,9 @@ Codex CLI가 요청을 해석하고, 검증된 `k-skill`과 사용자별 계정�
 - 같은 사용자의 요청은 순서대로 처리한다.
 - 서로 다른 사용자는 전역 worker 제한 안에서 동시에 사용할 수 있다.
 - `k-skill`은 BearHomeBot 저장소에 포함하지 않는다.
+- 개발 PC와 운영 host 사이에는 source code만 Git commit으로 전달하고,
+  login, session, database, secret과 runtime은 대상 PC에서 새로 만든다.
+- 가족용 Telegram gateway는 한 번에 하나의 활성 host에서만 실행한다.
 - 매일 00:00 `Asia/Seoul`에 새 `k-skill` 후보를 검증하고, 모든 필수 검사를
   통과한 경우에만 활성 release를 교체한다.
 - 결제, 전자서명 등 되돌리기 어려운 작업은 별도 정책이 생기기 전까지

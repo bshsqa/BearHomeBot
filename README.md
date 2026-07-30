@@ -45,6 +45,20 @@ Node.js 24는 프로젝트 루트의 `.nvmrc`에 고정되어 있습니다.
 ./scripts/start.sh --health
 ```
 
+## PC와 호스트 전환
+
+개발 PC를 바꾸거나 가족용 Telegram gateway를 다른 PC로 옮길 때는
+[PC와 호스트 전환 문서](docs/host-transition.md)를 따릅니다.
+
+핵심 원칙은 다음과 같습니다.
+
+- 개발 작업은 commit과 push로 전달합니다.
+- Codex login, thread, Telegram 설정, SQLite와 runtime은 대상 PC에서
+  새로 만듭니다.
+- 동일한 가족용 Telegram bot gateway는 한 번에 한 PC에서만 실행합니다.
+- 기존 gateway 종료를 확인한 뒤 새 PC의 gateway를 시작합니다.
+- 운영 미니 PC가 활성화되면 개발 PC에서는 별도 개발 bot을 사용합니다.
+
 ## Telegram-Codex 실행
 
 먼저 이 PC의 Codex CLI 로그인을 완료하고 상태를 확인합니다.
