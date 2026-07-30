@@ -100,3 +100,199 @@ test("digests each skill with its referenced and local package code", () => {
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+test("broadens review scope for prose mentions without a hard dependency", () => {
+  const root = mkdtempSync(join(tmpdir(), "bearhomebot-related-skills-"));
+  try {
+    mkdirSync(join(root, "coordinator"));
+    mkdirSync(join(root, "provider"));
+    mkdirSync(join(root, "never-use"));
+    writeFileSync(
+      join(root, "coordinator", "SKILL.md"),
+      "# Coordinator\nUse [provider](../provider/SKILL.md) for other requests.\nExample: --never-use never-use\n",
+    );
+    writeFileSync(
+      join(root, "provider", "SKILL.md"),
+      "# Provider\nReads public provider data.\n",
+    );
+    writeFileSync(join(root, "provider", "helper.py"), "print('provider')\n");
+    writeFileSync(join(root, "never-use", "SKILL.md"), "# Never Use\n");
+
+    const scopes = discoverSkillReviewScopes(root);
+    const coordinator = scopes.find((scope) => scope.skillId === "coordinator");
+
+    assert.ok(coordinator?.files.includes("provider/SKILL.md"));
+    assert.ok(coordinator?.files.includes("provider/helper.py"));
+    assert.ok(coordinator?.files.includes("never-use/SKILL.md"));
+    assert.deepEqual(coordinator?.dependencies, []);
+    const reviewedManifest = buildReviewedCandidateManifest(
+      manifest(),
+      scopes,
+      undefined,
+      1,
+    );
+    assert.deepEqual(
+      reviewedManifest.behaviorReview.inventory.find(
+        (item) => item.skillId === "coordinator",
+      )?.dependencies,
+      [],
+    );
+
+    const previousWithStaleDependency = structuredClone(reviewedManifest);
+    const previousCoordinator =
+      previousWithStaleDependency.behaviorReview.inventory.find(
+        (item) => item.skillId === "coordinator",
+      );
+    assert.ok(previousCoordinator);
+    previousCoordinator.dependencies = ["provider"];
+    const refreshedManifest = buildReviewedCandidateManifest(
+      manifest(),
+      scopes,
+      previousWithStaleDependency,
+      1,
+    );
+    assert.ok(
+      refreshedManifest.behaviorReview.unchanged.includes("coordinator"),
+    );
+    assert.deepEqual(
+      refreshedManifest.behaviorReview.inventory.find(
+        (item) => item.skillId === "coordinator",
+      )?.dependencies,
+      [],
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("finds exact sibling references inside skill implementation files", () => {
+  const root = mkdtempSync(join(tmpdir(), "bearhomebot-script-reference-"));
+  try {
+    mkdirSync(join(root, "coordinator"));
+    mkdirSync(join(root, "provider"));
+    mkdirSync(join(root, "provider-extra"));
+    writeFileSync(
+      join(root, "coordinator", "SKILL.md"),
+      "# Coordinator\nRuns its local implementation.\n",
+    );
+    writeFileSync(
+      join(root, "coordinator", "run.py"),
+      'SIBLING_SKILL = "provider-extra"\n',
+    );
+    writeFileSync(join(root, "provider", "SKILL.md"), "# Provider\n");
+    writeFileSync(
+      join(root, "provider-extra", "SKILL.md"),
+      "# Provider Extra\n",
+    );
+    writeFileSync(
+      join(root, "provider-extra", "helper.py"),
+      "print('extra')\n",
+    );
+
+    const coordinator = discoverSkillReviewScopes(root).find(
+      (scope) => scope.skillId === "coordinator",
+    );
+
+    assert.deepEqual(coordinator?.dependencies, ["provider-extra"]);
+    assert.ok(coordinator?.files.includes("provider-extra/helper.py"));
+    assert.equal(coordinator?.files.includes("provider/SKILL.md"), false);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("reviews sibling paths reached through shared scripts and packages", () => {
+  const root = mkdtempSync(join(tmpdir(), "bearhomebot-script-package-"));
+  try {
+    mkdirSync(join(root, "coordinator"));
+    mkdirSync(join(root, "provider"));
+    mkdirSync(join(root, "package-provider"));
+    mkdirSync(join(root, "scripts"));
+    mkdirSync(join(root, "packages", "shared"), { recursive: true });
+    writeFileSync(
+      join(root, "coordinator", "SKILL.md"),
+      "# Coordinator\nRuns its local implementation.\n",
+    );
+    writeFileSync(
+      join(root, "coordinator", "run.js"),
+      [
+        'import { run } from "@fixture/shared";',
+        'const helper = "../scripts/shared.py";',
+        "run(helper);",
+        "",
+      ].join("\n"),
+    );
+    writeFileSync(
+      join(root, "scripts", "shared.py"),
+      'helper = "../provider/helper.py"\n',
+    );
+    writeFileSync(join(root, "provider", "SKILL.md"), "# Provider\n");
+    writeFileSync(join(root, "provider", "helper.py"), "print('provider')\n");
+    writeFileSync(
+      join(root, "package-provider", "SKILL.md"),
+      "# Package Provider\n",
+    );
+    writeFileSync(
+      join(root, "package-provider", "helper.py"),
+      "print('package provider')\n",
+    );
+    writeFileSync(
+      join(root, "packages", "shared", "package.json"),
+      JSON.stringify({ name: "@fixture/shared" }),
+    );
+    writeFileSync(
+      join(root, "packages", "shared", "index.js"),
+      'const helper = "../../package-provider/helper.py";\nexport const run = () => helper;\n',
+    );
+
+    const coordinator = discoverSkillReviewScopes(root).find(
+      (scope) => scope.skillId === "coordinator",
+    );
+
+    assert.ok(coordinator?.files.includes("scripts/shared.py"));
+    assert.ok(coordinator?.files.includes("packages/shared/index.js"));
+    assert.ok(coordinator?.files.includes("provider/helper.py"));
+    assert.ok(coordinator?.files.includes("package-provider/helper.py"));
+    assert.deepEqual(coordinator?.dependencies, []);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("follows transitive skill references and invalidates the parent digest", () => {
+  const root = mkdtempSync(join(tmpdir(), "bearhomebot-transitive-skills-"));
+  try {
+    mkdirSync(join(root, "coordinator"));
+    mkdirSync(join(root, "provider"));
+    mkdirSync(join(root, "source"));
+    writeFileSync(
+      join(root, "coordinator", "SKILL.md"),
+      "# Coordinator\nRuns its local implementation.\n",
+    );
+    writeFileSync(
+      join(root, "coordinator", "run.py"),
+      'helper = "../provider/helper.py"\n',
+    );
+    writeFileSync(join(root, "provider", "SKILL.md"), "# Provider\n");
+    writeFileSync(
+      join(root, "provider", "helper.py"),
+      'source = "../source/helper.py"\n',
+    );
+    writeFileSync(join(root, "source", "SKILL.md"), "# Source\n");
+    writeFileSync(join(root, "source", "helper.py"), "VALUE = 1\n");
+
+    const first = discoverSkillReviewScopes(root).find(
+      (scope) => scope.skillId === "coordinator",
+    );
+    assert.deepEqual(first?.dependencies, ["provider", "source"]);
+    assert.ok(first?.files.includes("source/helper.py"));
+
+    writeFileSync(join(root, "source", "helper.py"), "VALUE = 2\n");
+    const second = discoverSkillReviewScopes(root).find(
+      (scope) => scope.skillId === "coordinator",
+    );
+    assert.notEqual(second?.contentDigest, first?.contentDigest);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});

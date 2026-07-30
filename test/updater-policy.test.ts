@@ -16,6 +16,7 @@ test("loads the version-controlled k-skill trust policy", () => {
   assert.equal(policy.limits.maxBlobBytes, 5 * 1024 * 1024);
   assert.equal(policy.behaviorReview.policyVersion, 1);
   assert.equal(policy.behaviorReview.batchSize, 8);
+  assert.equal(policy.behaviorReview.maxConcurrency, 3);
 });
 
 test("rejects unknown fields and credentialed upstream URLs", () => {

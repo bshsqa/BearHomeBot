@@ -655,6 +655,48 @@ export class StateStore {
     return this.#requireKSkillRelease(candidate.sha);
   }
 
+  refreshActiveKSkillRelease(candidate: {
+    sha: string;
+    releasePath: string;
+    manifest: unknown;
+    review: unknown;
+  }): KSkillReleaseRecord {
+    validateGitSha(candidate.sha);
+    return this.#transaction(() => {
+      const state = this.getKSkillActiveState();
+      const active = this.#requireKSkillRelease(candidate.sha);
+      if (state.activeSha !== candidate.sha || active.status !== "active") {
+        throw new Error("Only the active k-skill release can be refreshed");
+      }
+      const now = this.#now();
+      const result = this.#database
+        .prepare(
+          `UPDATE k_skill_releases
+           SET manifest_json = ?, review_json = ?, release_path = ?,
+               failure_code = NULL, validated_at = ?, updated_at = ?
+           WHERE sha = ? AND status = 'active'`,
+        )
+        .run(
+          JSON.stringify(candidate.manifest),
+          JSON.stringify(candidate.review),
+          candidate.releasePath,
+          now,
+          now,
+          candidate.sha,
+        );
+      if (result.changes !== 1) {
+        throw new Error("Active k-skill release could not be refreshed");
+      }
+      this.#database
+        .prepare(
+          `UPDATE k_skill_state SET updated_at = ?
+           WHERE id = 1 AND active_sha = ?`,
+        )
+        .run(now, candidate.sha);
+      return this.#requireKSkillRelease(candidate.sha);
+    });
+  }
+
   getKSkillBehaviorReview(
     skillId: string,
     contentDigest: string,

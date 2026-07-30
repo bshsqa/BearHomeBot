@@ -15,6 +15,7 @@ function scope(): SkillReviewScope {
     skillId: "example",
     contentDigest: "a".repeat(64),
     files: ["example/SKILL.md", "example/run.py"],
+    dependencies: [],
   };
 }
 

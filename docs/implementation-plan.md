@@ -22,8 +22,9 @@ Codex CLI가 요청을 해석하고, 검증된 `k-skill`과 사용자별 계정�
 - 개발 PC와 운영 host 사이에는 source code만 Git commit으로 전달하고,
   login, session, database, secret과 runtime은 대상 PC에서 새로 만든다.
 - 가족용 Telegram gateway는 한 번에 하나의 활성 host에서만 실행한다.
-- 매일 00:00 `Asia/Seoul`에 새 `k-skill` 후보를 검증하고, 모든 필수 검사를
-  통과한 경우에만 활성 release를 교체한다.
+- 매일 00:00 `Asia/Seoul`에 새 `k-skill` 후보를 검증하고, 검토가 완결된
+  경우 승인 스킬만 활성 allowlist에 등록한다. 불확실하거나 거부된 스킬은
+  같은 release에서 명시적으로 제외한다.
 - 결제, 전자서명 등 되돌리기 어려운 작업은 별도 정책이 생기기 전까지
   자동 실행하지 않는다.
 
@@ -38,8 +39,9 @@ Codex CLI가 요청을 해석하고, 검증된 `k-skill`과 사용자별 계정�
 - Codex가 출력한 명령이나 자연어만으로 사용자, 권한, credential scope를
   변경하지 않는다.
 - Codex는 credential을 복호화하거나 평문 값을 전달받지 않는다.
-- credential이 필요한 작업은 BearHomeBot이 검증한 typed operation으로만
-  Capability Broker에 요청한다.
+- Codex의 자연어 해석 결과는 BearHomeBot이 검증하는 구조화된 실행 요청으로
+  바꾸며, Capability Broker가 스킬, principal, credential scope와 action
+  policy를 다시 확인한다.
 - 검증되지 않은 `k-skill` 후보에는 secret을 제공하지 않는다.
 - 로딩 안전 조건이 하나라도 실패하면 Codex 검토 결과와 관계없이
   후보를 활성화하지 않는다.
@@ -69,9 +71,13 @@ Codex Runner
        v
 Policy and Capability Broker
        |
-       +---- public, read-only skill runner
+       +---- active release enabledSkills allowlist
        |
-       +---- credentialed typed operation
+       +---- accountless approved skill
+       |
+       +---- credentialed approved skill
+                         |
+                         +---- per-user/provider profile
                          |
                          v
                     Secret Broker
@@ -85,7 +91,7 @@ Nightly Updater
 k-skill candidate -> loader safety -> changed-skill behavior review
        |
        v
-atomic promotion or active release unchanged
+approved enabled + uncertain/rejected excluded
 ```
 
 Telegram gateway, Codex runner, updater, capability runner, secret broker는
@@ -360,7 +366,7 @@ same Telegram private chat
 
 ### Phase 4: k-skill 로딩과 증분 동작 검토
 
-상태: 구조 변경 구현 완료, 최초 전체 behavior baseline 실환경 검토 대기
+상태: 구현 및 최초 전체 behavior baseline 실환경 검토 완료
 
 목적:
 
@@ -381,8 +387,12 @@ same Telegram private chat
   비정상 mode, 파일 수와 크기 초과를 materialize 전에 거부한다.
 - top-level `*/SKILL.md`를 실제 스킬 목록으로 사용한다.
 - 스킬 directory, 같은 이름의 local package, transitive local workspace
-  package, `SKILL.md`가 명시적으로 참조한 repository helper를 하나의
-  behavior scope로 묶어 content digest를 계산한다.
+  package, 스킬 구현이 참조한 repository helper와 다른 top-level 스킬을
+  재귀적으로 하나의 behavior scope로 묶어 content digest를 계산한다.
+- `SKILL.md` 설명과 문서 링크는 함께 검토할 범위만 넓힌다. 실행 코드가
+  명시적으로 참조한 top-level 스킬만 필수 실행 의존성으로 기록한다.
+- 의존 스킬이 제외되면 그 스킬을 사용하는 상위 스킬도 실행 목록에서
+  연쇄 제외한다.
 - SQLite에 `skill ID + content digest + review policy version`별 structured
   review를 저장한다.
 - active release와 cache가 없는 최초 update는 전체 behavior scope를
@@ -390,7 +400,7 @@ same Telegram private chat
 - upstream SHA가 active와 같으면 LLM을 호출하지 않는다. 새 commit이어도
   모든 scope digest가 같으면 기존 결과만 재사용한다.
 - patch가 있는 경우 cache가 없는 새 스킬과 digest가 바뀐 스킬만 batch로
-  검토한다.
+  검토하며 최대 3개의 격리된 Codex review를 병렬 실행한다.
 - rejected와 uncertain 결과도 cache해 같은 내용을 nightly job이 반복
   검토하지 않는다. 정책 자체를 바꾸면 policy version을 올려 전체 결과를
   무효화한다.
@@ -405,10 +415,16 @@ same Telegram private chat
   기능 비활성화 조건으로 실행한다.
 - candidate 코드, test, package script와 installer는 updater가 실행하지
   않는다.
-- 모든 현재 스킬이 approved인 경우에만 동일 Git SHA에서 fresh release를
-  만들고 content digest를 기록한 뒤 read-only로 만든다.
+- 모든 현재 스킬의 검토가 완결되면 `approved` 스킬은 `enabledSkills`,
+  `uncertain` 또는 `rejected` 스킬은 `excludedSkills`로 기록한다.
+- 승인된 스킬이 하나 이상이면 동일 Git SHA에서 fresh release를 만들고
+  content digest와 두 목록을 기록한 뒤 read-only로 만든다. 검토가
+  불완전하거나 승인된 스킬이 하나도 없으면 기존 active release를
+  유지한다.
 - 검토된 release만 SQLite transaction으로 active 상태로 교체하고 rollback
   시 content digest를 다시 검증한다.
+- 향후 Capability Broker와 runner는 release directory의 파일 존재 여부가
+  아니라 active release의 `enabledSkills`를 실행 allowlist로 강제한다.
 - `flock`으로 updater 동시 실행을 막고 `check`, `update`, `status`,
   `rollback` 운영 명령을 제공한다.
 
@@ -427,18 +443,29 @@ same Telegram private chat
 - root 문서만 변경된 commit에서는 기존 스킬 review를 모두 재사용한다.
 - 스킬 하나의 문서·helper·연결된 local package가 바뀌면 그 스킬만 다시
   검토한다.
-- 한 candidate가 거부돼도 이미 완료된 다른 스킬 review는 다음 patch에서
+- 한 스킬이 거부돼도 이미 완료된 다른 스킬 review는 다음 patch에서
   재사용한다.
-- 실패하거나 불확실한 review는 active release를 변경하지 않는다.
+- 실패하거나 불확실한 스킬은 `excludedSkills`에 남고 승인된 스킬만
+  활성화된다.
+- 전체 검토가 끝나지 않았거나 승인 스킬이 하나도 없으면 active release를
+  변경하지 않는다.
 - 결과에 candidate SHA, skill digest, policy version, structured review,
   token usage와 stable failure code가 남는다.
 
-남은 실환경 검증:
+실환경 검증 결과:
 
-- 현재 active release가 비어 있으므로 실제 upstream 전체 스킬에 대한 최초
-  behavior baseline을 한 번 수행한다.
-- baseline 승인 후 같은 SHA nightly no-op과, 작은 upstream patch에서
-  changed-skill-only review를 실제 Codex CLI로 확인한다.
+- 2026-07-31 현재 WSL2 host에서 upstream SHA
+  `42473dad91ca919fd21d6d8b7fc6dbae3fa48b2c`의 top-level 스킬 122개를
+  실제 Codex CLI로 전체 검토했다.
+- 개별 판정은 approved 89개, rejected 24개, uncertain 9개였다. 거부된
+  의존 스킬을 사용하는 approved 스킬 1개를 연쇄 제외해
+  `enabledSkills` 88개와 `excludedSkills` 34개로 active release를
+  승격했다.
+- 최종 scope version으로 교체할 때 기존 122개 결과를 모두 재사용했고,
+  같은 SHA의 update를 다시 실행해 0.64초 만에 `unchanged`로 종료하고
+  LLM을 다시 호출하지 않는 것을 확인했다.
+- 향후 upstream에 실제 작은 patch가 들어오면 nightly updater에서
+  changed-skill-only review를 운영 검증한다.
 
 ### Phase 5: Secret Broker와 사용자별 credential
 
@@ -500,37 +527,57 @@ same Telegram private chat
   확인했다.
 - 실제 Codex CLI를 BearHomeBot의 filesystem deny profile로 실행해 vault
   database 읽기 probe가 `VAULT_DENIED`로 차단되는 것을 확인했다.
-- 실제 KTX credential은 아직 등록하지 않으며 Phase 6 typed capability를
-  연결할 때 local hidden-input 명령으로 등록한다.
+- 실제 사이트 credential은 아직 등록하지 않으며 Phase 6 공통 Capability
+  Broker를 연결할 때 local hidden-input 명령으로 사용자별·provider별
+  profile을 등록한다. 현재 KTX importer는 그 첫 호환 입력 경로다.
 
-### Phase 6: Capability Broker와 첫 KTX 기능
+### Phase 6: 대화형 Capability Broker
 
 상태: Phase 5 완료 후 시작
 
-첫 credentialed capability는 KTX로 한다. KTX는 로그인, 검색, 예약,
-장기 monitoring, 알림, account lock을 함께 검증할 수 있다.
+목표는 KTX 전용 기능을 구현하는 것이 아니라, 승인된 여러 스킬을 Telegram
+자연어로 사용할 수 있는 공통 실행 경로를 만드는 것이다. 계정이 필요 없는
+스킬은 별도 설정 없이 실행한다. 계정이 필요한 사이트는 사용자가
+provider별 credential profile을 한 번 등록하며, 이후 요청 방식은 동일한
+Telegram 대화다. KTX는 로그인, 검색, 예약, 확인 정책을 함께 검증하기 좋은
+첫 end-to-end 예시일 뿐 별도 제품 경계가 아니다.
 
 작업:
 
-- pinned active release의 KTX skill만 읽는다.
-- 로그인 확인, 열차 검색, 좌석 확인, 예약 목록, 예약 생성, 예약 취소를
-  typed operation으로 정의한다.
-- Codex는 operation을 제안하고 BearHomeBot이 principal, policy,
-  confirmation을 검증한 뒤 실행한다.
-- 예약과 취소에는 idempotency key와 명시적 confirmation policy를 적용한다.
-- Secret Broker가 해당 사용자의 `KSKILL_KTX_ID`와
-  `KSKILL_KTX_PASSWORD`만 KTX helper child에 주입한다.
-- helper는 shell 없이 최소 environment와 pinned release로 실행한다.
-- 같은 Korail account를 사용하는 작업은 직렬화한다.
-- 결과를 structured job state에 저장하고 요청한 Telegram 사용자에게
-  알린다.
+- Codex가 Telegram 자연어 요청에 맞는 스킬과 action을 제안하게 하되,
+  active release의 `enabledSkills` 안에서만 선택하게 한다.
+- Capability Broker가 trusted principal, pinned release SHA, 승인 스킬
+  allowlist와 요청 action을 다시 검증한다.
+- 계정 없는 승인 스킬은 credential 없이 공통 runner로 실행한다.
+- 계정이 필요한 provider는 별도 TypeScript 기능 대신 credential field
+  mapping, helper entrypoint, 허용 destination, action risk class를
+  선언형 profile로 등록한다.
+- 관리자는 각 사용자의 provider profile에 필요한 credential을 local
+  hidden input으로 한 번 등록한다. Telegram 대화나 Codex prompt에서
+  password를 받지 않는다.
+- Secret Broker는 현재 principal과 provider scope에 필요한 최소 field만
+  pinned helper child에 just-in-time으로 주입한다.
+- 조회와 검색은 정책 범위에서 자동 실행하고, 예약 생성과 취소처럼 상태를
+  바꾸는 action은 실행 직전 confirmation과 idempotency key를 적용한다.
+  결제, 송금, 전자서명은 공통 정책으로 금지한다.
+- helper는 shell 없이 최소 environment로 실행하고, 같은 provider account를
+  쓰는 작업은 공통 account lock으로 직렬화한다.
+- helper output은 공통 structured result schema로 검증하고 중앙 redaction을
+  거쳐 요청한 Telegram 사용자에게 보낸다.
+- KTX 검색과 예약 조회를 첫 end-to-end fixture와 실환경 검증 대상으로
+  사용하되 KTX 전용 broker나 Telegram command는 만들지 않는다.
 
 완료 조건:
 
-- Codex는 Korail ID와 password를 받지 않는다.
-- 다른 사용자의 Korail account를 선택하거나 사용할 수 없다.
-- 동일 예약 요청이 재시도돼도 중복 예약되지 않는다.
-- 예약 결과에는 감사 가능한 stable operation ID가 남는다.
+- 사용자는 계정 없는 승인 스킬을 Telegram 자연어 요청만으로 실행할 수 있다.
+- provider 계정을 한 번 등록한 뒤 같은 자연어 방식으로 credentialed
+  스킬을 사용할 수 있다.
+- Codex는 어떤 provider의 ID와 password도 받지 않는다.
+- 다른 사용자의 account를 선택하거나 사용할 수 없다.
+- `excludedSkills` 또는 active allowlist에 없는 스킬은 release에 파일이
+  있어도 실행되지 않는다.
+- 동일한 상태 변경 요청이 재시도돼도 중복 실행되지 않고, 결과에는 감사
+  가능한 stable operation ID가 남는다.
 
 ### Phase 7: 영속 job과 동시 사용자 처리
 
@@ -663,15 +710,19 @@ BearHomeBot이 principal과 policy를 검증하고 Secret Broker가 credential�
 
 1. upstream candidate commit을 정확한 SHA로 가져온다.
 2. 최소 로딩 안전 조건과 스킬별 개인정보·위험 동작 review를 수행한다.
-3. 성공한 후보만 원자적으로 promote한다.
+3. 검토가 완결된 후보에서 승인 스킬 allowlist만 원자적으로 promote한다.
 4. active release 확인과 rollback이 가능하다.
 
-### Milestone 3: 사용자별 KTX
+### Milestone 3: 대화형 스킬 실행과 사용자별 계정
 
-1. 관리자가 사용자별 Korail credential을 encrypted vault에 import한다.
-2. Telegram 요청이 typed KTX operation으로 변환된다.
-3. Secret Broker가 Codex에 secret을 보여주지 않고 pinned helper를 실행한다.
-4. 검색, 예약, monitoring, cancellation 결과가 올바른 사용자에게 돌아간다.
+1. Telegram 자연어 요청에서 active release의 승인 스킬을 선택한다.
+2. 계정 없는 스킬은 별도 설정 없이 공통 runner로 실행한다.
+3. 관리자가 사용자별·provider별 credential profile을 encrypted vault에
+   한 번 등록한다.
+4. Secret Broker가 Codex에 secret을 보여주지 않고 필요한 credential
+   field만 pinned helper에 주입한다.
+5. KTX를 첫 예시로 검색과 credentialed 조회, confirmation이 필요한 action
+   결과가 올바른 사용자에게 돌아가는지 검증한다.
 
 ### Milestone 4: 상시 운영
 
@@ -682,23 +733,24 @@ BearHomeBot이 principal과 policy를 검증하고 Secret Broker가 credential�
 
 ## 9. 바로 다음 작업
 
-다음 구현 batch는 Phase 6의 첫 typed KTX capability다.
+다음 구현 batch는 Phase 6의 공통 대화형 Capability Broker다.
 
-1. active로 승격된 pinned `k-skill` release의 KTX helper interface를
-   확정한다.
-2. 공개 열차 검색과 credential이 필요한 로그인/예약 조회 operation을
-   별도 typed schema로 정의한다.
-3. 예약 생성과 취소에 single-use confirmation과 idempotency key를
-   적용하고 결제 operation을 구조적으로 금지한다.
-4. Secret Broker 내부 operation handler만 KTX ID와 password를 memory에서
-   복호화하고, pinned helper child의 최소 environment에 잠시 주입한다.
-5. helper output을 structured result로 검증하고 secret을 redaction한 뒤
-   Codex와 Telegram에는 비밀값 없는 결과만 전달한다.
+1. active release의 `enabledSkills`를 유일한 실행 allowlist로 연결한다.
+2. Telegram 자연어에서 제안된 스킬과 action을 trusted principal, pinned
+   SHA, 공통 action policy에 맞춰 검증하는 구조화 요청 schema를 정의한다.
+3. 계정 없는 승인 스킬을 실행하는 최소 environment의 공통 runner를 만든다.
+4. 사용자별·provider별 credential field mapping과 helper entrypoint,
+   destination, risk class를 담는 선언형 profile registry를 만든다.
+5. Secret Broker가 profile에 필요한 최소 field만 helper child에 주입하고,
+   공통 structured result와 redaction을 거쳐 결과를 반환하게 한다.
+6. KTX를 첫 fixture로 검색과 credentialed 조회를 검증하고, 예약·취소에는
+   single-use confirmation과 idempotency를 적용한다. KTX 전용 broker나
+   Telegram command는 만들지 않는다.
 
-현재 active `k-skill` release가 비어 있고 새 동작 검토 정책의 최초 전체
-baseline이 아직 실행되지 않았다. Phase 6은 baseline이 승인되어 release가
-승격되기 전까지 실제 예약을 실행하지 않고 fixture 기반 통합 test로 먼저
-진행한다.
+현재 WSL2 host에는 승인된 스킬 목록 88개가 포함된 active `k-skill`
+release가 준비됐다. Phase 6은 이 allowlist를 공통 실행 경계에 연결하고
+fixture 기반 통합 test를 통과한 뒤 실제 사이트 작업을 단계적으로
+검증한다. 다른 host는 자체 local baseline과 release를 새로 만든다.
 
 ## 10. 참고 자료
 

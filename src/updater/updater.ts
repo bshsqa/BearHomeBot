@@ -17,6 +17,7 @@ import type {
 import {
   buildReviewedCandidateManifest,
   discoverSkillReviewScopes,
+  SKILL_SCOPE_VERSION,
   type ReviewedCandidateManifest,
   type SkillReviewScope,
 } from "./skills.js";
@@ -30,7 +31,7 @@ export interface CandidateReviewerLike {
 }
 
 export interface KSkillUpdateResult {
-  status: "promoted" | "unchanged";
+  status: "promoted" | "refreshed" | "unchanged";
   sha: string;
   releasePath: string;
   manifest: ReviewedCandidateManifest;
@@ -60,6 +61,25 @@ function failureCode(error: unknown): string {
     return error.code;
   }
   return "pipeline_failed";
+}
+
+function hasCurrentReviewPolicy(
+  manifest: unknown,
+  policy: KSkillPolicy,
+): boolean {
+  if (!manifest || typeof manifest !== "object" || Array.isArray(manifest)) {
+    return false;
+  }
+  const behaviorReview = (manifest as Record<string, unknown>).behaviorReview;
+  return (
+    Boolean(behaviorReview) &&
+    typeof behaviorReview === "object" &&
+    !Array.isArray(behaviorReview) &&
+    (behaviorReview as Record<string, unknown>).scopeVersion ===
+      SKILL_SCOPE_VERSION &&
+    (behaviorReview as Record<string, unknown>).policyVersion ===
+      policy.behaviorReview.policyVersion
+  );
 }
 
 function cachedSkillReview(
@@ -103,20 +123,46 @@ function mergeUsage(
 
 function summarizeReview(
   policyVersion: number,
-  totalSkills: number,
+  scopes: readonly SkillReviewScope[],
   results: Map<string, SkillBehaviorReview & { source: "reviewed" | "cache" }>,
   usage?: CodexUsage,
 ): CandidateBehaviorReview {
+  const totalSkills = scopes.length;
   const skills = [...results.values()].sort((left, right) =>
     left.skillId.localeCompare(right.skillId, "en"),
   );
-  const status = skills.some((skill) => skill.status === "rejected")
-    ? "rejected"
-    : skills.some((skill) => skill.status === "uncertain")
-      ? "uncertain"
-      : skills.length === totalSkills
-        ? "approved"
-        : "uncertain";
+  const enabled = new Set(
+    skills
+      .filter((skill) => skill.status === "approved")
+      .map((skill) => skill.skillId),
+  );
+  let dependencyExclusionFound = true;
+  while (dependencyExclusionFound) {
+    dependencyExclusionFound = false;
+    for (const scope of scopes) {
+      if (
+        enabled.has(scope.skillId) &&
+        scope.dependencies.some((dependency) => !enabled.has(dependency))
+      ) {
+        enabled.delete(scope.skillId);
+        dependencyExclusionFound = true;
+      }
+    }
+  }
+  const enabledSkills = scopes
+    .map((scope) => scope.skillId)
+    .filter((skillId) => enabled.has(skillId))
+    .sort((left, right) => left.localeCompare(right, "en"));
+  const excludedSkills = scopes
+    .map((scope) => scope.skillId)
+    .filter((skillId) => !enabled.has(skillId))
+    .sort((left, right) => left.localeCompare(right, "en"));
+  const status =
+    skills.length !== totalSkills || enabledSkills.length === 0
+      ? "rejected"
+      : excludedSkills.length > 0
+        ? "approved_with_exclusions"
+        : "approved";
   const reviewedSkills = skills
     .filter((skill) => skill.source === "reviewed")
     .map((skill) => skill.skillId);
@@ -128,11 +174,15 @@ function summarizeReview(
     summary:
       status === "approved"
         ? `${totalSkills} skill behavior scopes are approved; ${reviewedSkills.length} reviewed and ${reusedSkills.length} reused.`
-        : `Skill behavior review stopped without full approval; ${reviewedSkills.length} reviewed and ${reusedSkills.length} reused.`,
+        : status === "approved_with_exclusions"
+          ? `${enabledSkills.length} skills are enabled and ${excludedSkills.length} are excluded; ${reviewedSkills.length} reviewed and ${reusedSkills.length} reused.`
+          : `No releasable skill set is available; ${reviewedSkills.length} reviewed and ${reusedSkills.length} reused.`,
     policyVersion,
     totalSkills,
     reviewedSkills,
     reusedSkills,
+    enabledSkills,
+    excludedSkills,
     skills,
   };
   if (usage) {
@@ -180,7 +230,8 @@ export class KSkillUpdater {
   async update(signal?: AbortSignal): Promise<KSkillUpdateResult> {
     const candidate = await this.#mirror.fetchCandidate(signal);
     const state = this.#store.getKSkillActiveState();
-    if (state.activeSha === candidate.sha) {
+    const refreshingActive = state.activeSha === candidate.sha;
+    if (refreshingActive) {
       const active = this.#store.getKSkillRelease(candidate.sha);
       if (!active?.releasePath || !active.manifest) {
         throw new KSkillUpdaterError(
@@ -188,22 +239,26 @@ export class KSkillUpdater {
           "Active k-skill release metadata is incomplete",
         );
       }
-      this.#releaseManager.verifyRelease(active.releasePath, candidate.sha);
-      return {
-        status: "unchanged",
-        sha: candidate.sha,
-        releasePath: active.releasePath,
-        manifest: active.manifest as ReviewedCandidateManifest,
-      };
+      if (hasCurrentReviewPolicy(active.manifest, this.#policy)) {
+        this.#releaseManager.verifyRelease(active.releasePath, candidate.sha);
+        return {
+          status: "unchanged",
+          sha: candidate.sha,
+          releasePath: active.releasePath,
+          manifest: active.manifest as ReviewedCandidateManifest,
+        };
+      }
     }
 
-    this.#store.recordKSkillCandidate({
-      sha: candidate.sha,
-      treeSha: candidate.treeSha,
-      sourceUrl: this.#policy.upstream.url,
-      sourceBranch: this.#policy.upstream.branch,
-      manifest: { status: "pending" },
-    });
+    if (!refreshingActive) {
+      this.#store.recordKSkillCandidate({
+        sha: candidate.sha,
+        treeSha: candidate.treeSha,
+        sourceUrl: this.#policy.upstream.url,
+        sourceBranch: this.#policy.upstream.branch,
+        manifest: { status: "pending" },
+      });
+    }
 
     let reviewDirectory: string | undefined;
     try {
@@ -218,7 +273,8 @@ export class KSkillUpdater {
         candidate,
         signal,
       );
-      const scopes = discoverSkillReviewScopes(reviewDirectory);
+      const candidateReviewDirectory = reviewDirectory;
+      const scopes = discoverSkillReviewScopes(candidateReviewDirectory);
       const activeManifest = state.activeSha
         ? this.#store.getKSkillRelease(state.activeSha)?.manifest
         : undefined;
@@ -228,13 +284,15 @@ export class KSkillUpdater {
         activeManifest,
         this.#policy.behaviorReview.policyVersion,
       );
-      this.#store.recordKSkillCandidate({
-        sha: candidate.sha,
-        treeSha: candidate.treeSha,
-        sourceUrl: this.#policy.upstream.url,
-        sourceBranch: this.#policy.upstream.branch,
-        manifest,
-      });
+      if (!refreshingActive) {
+        this.#store.recordKSkillCandidate({
+          sha: candidate.sha,
+          treeSha: candidate.treeSha,
+          sourceUrl: this.#policy.upstream.url,
+          sourceBranch: this.#policy.upstream.branch,
+          manifest,
+        });
+      }
 
       const results = new Map<
         string,
@@ -258,18 +316,9 @@ export class KSkillUpdater {
       let usage: CodexUsage | undefined;
       let review = summarizeReview(
         this.#policy.behaviorReview.policyVersion,
-        scopes.length,
+        scopes,
         results,
       );
-      if (
-        [...results.values()].some((result) => result.status !== "approved")
-      ) {
-        throw new KSkillUpdaterError(
-          "behavior_review_rejected",
-          "A cached skill behavior review did not approve the candidate",
-          review,
-        );
-      }
       if (pending.length > 0 && !this.#reviewer) {
         throw new KSkillUpdaterError(
           "reviewer_unavailable",
@@ -277,61 +326,90 @@ export class KSkillUpdater {
         );
       }
 
+      const batches: SkillReviewScope[][] = [];
       for (
         let index = 0;
         index < pending.length;
         index += this.#policy.behaviorReview.batchSize
       ) {
-        const batch = pending.slice(
-          index,
-          index + this.#policy.behaviorReview.batchSize,
+        batches.push(
+          pending.slice(index, index + this.#policy.behaviorReview.batchSize),
         );
-        const execution = await this.#reviewer!.review(
-          reviewDirectory,
-          batch,
-          signal,
-        );
+      }
+      const executions: Array<BehaviorReviewExecution | undefined> = Array.from(
+        { length: batches.length },
+      );
+      const failures: Array<{ batchIndex: number; error: unknown }> = [];
+      let nextBatchIndex = 0;
+      let stopScheduling = false;
+      const reviewNextBatch = async (): Promise<void> => {
+        while (!stopScheduling) {
+          const batchIndex = nextBatchIndex;
+          nextBatchIndex += 1;
+          const batch = batches[batchIndex];
+          if (!batch) {
+            return;
+          }
+          try {
+            const execution = await this.#reviewer!.review(
+              candidateReviewDirectory,
+              batch,
+              signal,
+            );
+            for (const reviewed of execution.reviews) {
+              this.#store.recordKSkillBehaviorReview({
+                skillId: reviewed.skillId,
+                contentDigest: reviewed.contentDigest,
+                policyVersion: this.#policy.behaviorReview.policyVersion,
+                sourceSha: candidate.sha,
+                review: reviewed,
+              });
+            }
+            executions[batchIndex] = execution;
+          } catch (error) {
+            failures.push({ batchIndex, error });
+            stopScheduling = true;
+          }
+        }
+      };
+      await Promise.all(
+        Array.from(
+          {
+            length: Math.min(
+              batches.length,
+              this.#policy.behaviorReview.maxConcurrency,
+            ),
+          },
+          reviewNextBatch,
+        ),
+      );
+      if (failures.length > 0) {
+        failures.sort((left, right) => left.batchIndex - right.batchIndex);
+        throw failures[0]!.error;
+      }
+      for (const execution of executions) {
+        if (!execution) {
+          throw new Error("Skill behavior review batch result is missing");
+        }
         usage = mergeUsage(usage, execution.usage);
         for (const reviewed of execution.reviews) {
-          this.#store.recordKSkillBehaviorReview({
-            skillId: reviewed.skillId,
-            contentDigest: reviewed.contentDigest,
-            policyVersion: this.#policy.behaviorReview.policyVersion,
-            sourceSha: candidate.sha,
-            review: reviewed,
-          });
           results.set(reviewed.skillId, {
             ...reviewed,
             source: "reviewed",
           });
         }
-        review = summarizeReview(
-          this.#policy.behaviorReview.policyVersion,
-          scopes.length,
-          results,
-          usage,
-        );
-        if (
-          execution.reviews.some((reviewed) => reviewed.status !== "approved")
-        ) {
-          throw new KSkillUpdaterError(
-            "behavior_review_rejected",
-            "Skill behavior review rejected the candidate",
-            review,
-          );
-        }
       }
 
       review = summarizeReview(
         this.#policy.behaviorReview.policyVersion,
-        scopes.length,
+        scopes,
         results,
         usage,
       );
-      if (review.status !== "approved") {
+      if (review.status === "rejected") {
         throw new KSkillUpdaterError(
           "behavior_review_rejected",
-          "Skill behavior review did not approve every skill",
+          "Skill behavior review did not produce an approved skill set",
           review,
         );
       }
@@ -346,14 +424,23 @@ export class KSkillUpdater {
         signal,
       );
       this.#releaseManager.verifyRelease(release.path, candidate.sha);
-      this.#store.markKSkillCandidateValidated({
-        sha: candidate.sha,
-        releasePath: release.path,
-        review,
-      });
-      this.#store.promoteKSkillRelease(candidate.sha);
+      if (refreshingActive) {
+        this.#store.refreshActiveKSkillRelease({
+          sha: candidate.sha,
+          releasePath: release.path,
+          manifest,
+          review,
+        });
+      } else {
+        this.#store.markKSkillCandidateValidated({
+          sha: candidate.sha,
+          releasePath: release.path,
+          review,
+        });
+        this.#store.promoteKSkillRelease(candidate.sha);
+      }
       return {
-        status: "promoted",
+        status: refreshingActive ? "refreshed" : "promoted",
         sha: candidate.sha,
         releasePath: release.path,
         manifest,

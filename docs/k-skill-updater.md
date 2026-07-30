@@ -25,12 +25,20 @@ updater는 후보 코드, test, package script 또는 installer를 실행하지 
    - 해당 스킬 directory 전체
    - 같은 이름의 `packages/<skill-id>` local package
    - 그 package가 의존하는 다른 local workspace package
-   - `SKILL.md`가 명시적으로 참조한 repository 내부 helper
+   - 스킬 구현이 명시적으로 참조한 repository 내부 helper와 top-level
+     스킬을 연쇄적으로 추적한 범위
+   - `SKILL.md`의 설명이나 문서 링크는 검토 범위에는 포함하되, 실행 코드가
+     명시적으로 참조한 top-level 스킬만 필수 실행 의존성으로 기록
 7. SQLite에서 같은 `skill ID + content digest + review policy version`의
    기존 결과를 찾는다.
-8. cache가 없는 스킬만 정책의 batch 크기로 ephemeral Codex에 전달한다.
-9. 모든 현재 스킬이 approved인 경우에만 동일 Git SHA에서 fresh release를
-   만들고 active pointer를 원자적으로 교체한다.
+8. cache가 없는 스킬만 정책의 batch 크기로 나누고 최대 3개의 ephemeral
+   Codex에 병렬 전달한다.
+9. 검토가 완결되면 `approved` 스킬은 `enabledSkills`에 넣고 `uncertain`
+   또는 `rejected` 스킬은 `excludedSkills`에 넣는다. 제외된 스킬에
+   의존하는 상위 스킬도 연쇄 제외한다.
+10. 승인된 스킬이 하나 이상이면 동일 Git SHA에서 fresh release를 만들고
+    두 목록을 metadata에 고정한 뒤 active pointer를 원자적으로 교체한다.
+    검토가 불완전하거나 승인된 스킬이 하나도 없으면 승격하지 않는다.
 
 ## 최초 검토와 nightly 증분 검토
 
@@ -40,11 +48,14 @@ updater는 후보 코드, test, package script 또는 installer를 실행하지 
   않고 기존 approved 결과를 재사용한다.
 - 새 스킬 또는 content digest가 달라진 스킬만 다시 검토한다.
 - 삭제된 스킬은 더 이상 실행 대상이 아니므로 LLM 검토 대상이 아니다.
-- 한 후보가 거부되더라도 그 전에 완료된 스킬별 결과는 cache에 남는다.
+- 한 스킬이 거부되더라도 그 전에 완료된 스킬별 결과는 cache에 남는다.
   다음 patch에서는 같은 내용을 다시 검토하지 않는다.
 - rejected 또는 uncertain digest도 cache한다. 같은 내용을 매일 재검토하지
   않으며, 내용 수정 또는 `behaviorReview.policyVersion` 증가가 있어야 새
   검토가 수행된다.
+- 한 candidate의 모든 스킬은 끝까지 분류한다. 일부 결과가 `rejected` 또는
+  `uncertain`이어도 승인된 스킬은 등록하고 해당 스킬만 실행 대상에서
+  제외한다.
 
 검토 정책 자체가 바뀌어 전체 재검토가 필요하면
 `config/k-skill-policy.json`의 `behaviorReview.policyVersion`을 올린다.
@@ -67,13 +78,21 @@ Codex는 각 스킬의 `SKILL.md`와 계산된 구현 범위만 읽고 다음을
 - 사용자나 모델에게 secret 노출을 요구하는 지시
 - arbitrary remote code/download 실행
 - 숨은 telemetry 또는 secret logging
-- Secret Broker와 typed operation 경계 우회
+- Secret Broker와 Capability Broker의 구조화 실행 경계 우회
 - 설명한 목적과 실질적으로 다른 동작
 - 파괴적이거나 되돌리기 어려운 숨은 action
 
 명시한 서비스에 목적 수행에 필요한 최소 데이터만 보내는 정상적인 요청은
 그 사실이 드러나 있고 비례적이면 승인할 수 있다. 증거가 부족하면
-`uncertain`으로 처리하며 candidate는 승격하지 않는다.
+`uncertain`으로 처리하며 해당 스킬을 `excludedSkills`에 넣는다.
+
+## 실행 allowlist
+
+release directory에는 같은 upstream SHA의 전체 tree가 들어갈 수 있지만,
+실행 권한은 release metadata의 `enabledSkills`로 결정한다. 향후
+Capability Broker와 모든 runner는 스킬을 선택하거나 helper를 시작하기
+전에 현재 active release의 SHA와 `enabledSkills`를 함께 확인해야 한다.
+`excludedSkills` 또는 목록에 없는 스킬은 파일이 존재해도 실행하지 않는다.
 
 ## Codex 격리
 
@@ -133,7 +152,7 @@ untrusted data다. 검토 prompt는 그 안의 지시를 따르지 않도록 명
 ./scripts/k-skill-updater.sh check
 ```
 
-필요한 스킬 동작 검토를 수행하고 승인된 candidate를 활성화한다.
+필요한 스킬 동작 검토를 수행하고 승인된 스킬 목록을 활성화한다.
 
 ```bash
 ./scripts/k-skill-updater.sh update
@@ -164,7 +183,9 @@ metadata는 SQLite에 남는다.
 
 - fetch나 로딩 안전 조건 실패: candidate를 실행하거나 검토하지 않는다.
 - Codex가 `rejected` 또는 `uncertain`을 반환: 해당 digest 결과를 저장하고
-  candidate를 승격하지 않는다.
+  해당 스킬만 `excludedSkills`에 넣는다.
+- 모든 스킬 검토가 끝났지만 `approved`가 없음: candidate를 승격하지
+  않는다.
 - Codex timeout, malformed output 또는 CLI 오류: candidate를 승격하지
   않는다.
 - release 생성, digest 검증 또는 promotion transaction 실패: 기존 active

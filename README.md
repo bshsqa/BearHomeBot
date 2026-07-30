@@ -5,9 +5,11 @@ BearHomeBot은 승인된 Telegram 사용자의 요청을 Codex CLI와 검증된
 
 현재 Telegram과 Codex CLI의 다중 세션 대화, 증분 `k-skill` 동작 검토
 updater, 사용자별 encrypted vault와 Secret Broker 기반이 구현되어
-있습니다. 실제 서비스 계정을 사용하는 credentialed capability는 아직
-연결하지 않았으며, 모든 런타임 설정과 상태는 저장소 밖의 전용 경로를
-사용합니다.
+있습니다. 다음 단계는 Telegram 자연어 요청에서 승인된 스킬을 고르는
+공통 Capability Broker입니다. 계정이 없는 스킬은 그대로 실행하고,
+계정이 필요한 사이트는 사용자별 provider 계정을 한 번 등록해 같은
+대화 방식으로 사용합니다. 모든 런타임 설정과 상태는 저장소 밖의 전용
+경로를 사용합니다.
 
 ## 기준 환경
 
@@ -131,9 +133,10 @@ Telegram gateway credential 분리는 운영 service 계정 구성 단계에서
 
 현재 WSL2 host에서는 vault master key를 Windows DPAPI `CurrentUser`로
 보호합니다. C 드라이브 암호화는 이 프로젝트의 필수 조건이 아니지만,
-KTX ID와 password 자체는 항상 별도 vault database에서 AES-256-GCM으로
-인증 암호화합니다. DPAPI가 설정되지 않았거나 현재 Windows 사용자로
-해제할 수 없으면 credential 기능만 fail-closed로 잠깁니다.
+사이트 ID와 password 자체는 항상 별도 vault database에서
+AES-256-GCM으로 인증 암호화합니다. DPAPI가 설정되지 않았거나 현재
+Windows 사용자로 해제할 수 없으면 credential 기능만 fail-closed로
+잠깁니다.
 
 최초 한 번 vault를 초기화하고 상태를 확인합니다.
 
@@ -143,9 +146,13 @@ npm run build
 node dist/vault-main.js status
 ```
 
-Phase 6에서 KTX 기능을 연결할 때 관리자가 로컬 terminal에서 사용자별
-credential을 등록합니다. 입력값은 화면에 표시되지 않고 명령행 인자,
-Telegram 또는 Codex prompt로 전달되지 않습니다.
+Phase 6에서는 관리자가 로컬 terminal에서 사용자별·provider별 credential
+profile을 한 번 등록합니다. 입력값은 화면에 표시되지 않고 명령행 인자,
+Telegram 또는 Codex prompt로 전달되지 않습니다. 이후에는 KTX를 포함한
+각 사이트를 위한 별도 대화 명령을 만들지 않고 Telegram 자연어 요청으로
+사용합니다.
+
+현재 구현된 KTX 등록 명령은 이 공통 profile의 첫 실환경 예시입니다.
 
 ```bash
 ./scripts/configure-ktx-credentials.sh <Telegram 숫자 사용자 ID>
@@ -162,7 +169,7 @@ node dist/vault-main.js list <Telegram 숫자 사용자 ID>
 ```
 
 개발 단계에서 Secret Broker를 별도 foreground process로 확인하려면
-다음을 사용합니다. 실제 예약 capability와 systemd service 연결은
+다음을 사용합니다. 공통 Capability Broker와 systemd service 연결은
 Phase 6과 Phase 8에서 진행합니다.
 
 ```bash
@@ -215,7 +222,9 @@ Telegram bot token은 별도의 `0600` 로컬 파일에 보관하며 Codex
 `k-skill`은 BearHomeBot 저장소에 포함하지 않습니다. updater가 고정된
 업스트림의 `main`을 bare mirror로 가져온 뒤 정확한 commit SHA를 안전하게
 materialize하고, 각 스킬의 실제 동작과 개인정보 전송 위험을 ephemeral
-Codex로 검토합니다. 승인되지 않거나 불확실한 스킬이 있으면 기존 active
+Codex로 검토합니다. 검토가 끝난 release에서는 `approved` 스킬만
+`enabledSkills`에 등록하고 `uncertain` 또는 `rejected` 스킬은 명시적으로
+제외합니다. 검토가 불완전하거나 승인된 스킬이 하나도 없으면 기존 active
 release를 그대로 유지합니다.
 
 최초 update는 모든 top-level 스킬을 검토합니다. 이후에는 스킬 정의,
@@ -235,8 +244,10 @@ Codex를 전혀 호출하지 않습니다.
 
 `check`는 fetch와 path, symlink, submodule, mode, 크기 같은 로딩 안전
 조건만 확인하며 후보 코드를 실행하지 않습니다. `update`는 필요한 스킬의
-증분 동작 검토, 불변 release 생성, SQLite active pointer 교체까지
-수행합니다. 후보 코드나 test는 updater가 실행하지 않습니다. 동시에 두
+증분 동작 검토, 승인 스킬 allowlist가 포함된 불변 release 생성, SQLite
+active pointer 교체까지 수행합니다. 후보 코드나 test는 updater가 실행하지
+않습니다. 이후 Capability Broker는 release 안에 파일이 있다는 이유만으로
+실행하지 않고 반드시 `enabledSkills`를 확인해야 합니다. 동시에 두
 updater가 실행되지 않도록 `flock`을 사용합니다.
 
 전체 구현 순서는 [Ubuntu 구현 계획](docs/implementation-plan.md)을

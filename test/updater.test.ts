@@ -156,6 +156,17 @@ test("reviews the initial baseline once and reuses unchanged skill reviews", asy
     assert.equal(unchanged.status, "unchanged");
     assert.deepEqual(context.reviewedBatches, [["example"]]);
 
+    context.store.refreshActiveKSkillRelease({
+      sha: first.sha,
+      releasePath: first.releasePath,
+      manifest: { legacyScope: true },
+      review: first.review ?? {},
+    });
+    const refreshed = await context.updater.update();
+    assert.equal(refreshed.status, "refreshed");
+    assert.equal(refreshed.manifest.behaviorReview.scopeVersion, 3);
+    assert.deepEqual(context.reviewedBatches, [["example"]]);
+
     const docsOnlySha = commitAndPush(context.source, "root docs only", () => {
       writeFileSync(join(context.source, "README.md"), "version two\n");
     });
@@ -210,6 +221,183 @@ test("reviews only a newly added skill", async () => {
   }
 });
 
+test("excludes an approved skill whose dependency is not approved", async () => {
+  const context = fixture();
+  try {
+    commitAndPush(context.source, "add dependent skills", () => {
+      mkdirSync(join(context.source, "dependent"));
+      mkdirSync(join(context.source, "uncertain"));
+      writeFileSync(
+        join(context.source, "dependent", "SKILL.md"),
+        "# Dependent\nRuns its local implementation.\n",
+      );
+      writeFileSync(
+        join(context.source, "dependent", "run.py"),
+        'helper = "../uncertain/helper.py"\n',
+      );
+      writeFileSync(
+        join(context.source, "uncertain", "SKILL.md"),
+        "# Uncertain\nRequires an implementation that is not in this repository.\n",
+      );
+      writeFileSync(
+        join(context.source, "uncertain", "helper.py"),
+        "print('uncertain')\n",
+      );
+    });
+    const reviewer: CandidateReviewerLike = {
+      review: async (_candidateDirectory, scopes) => ({
+        reviews: scopes.map((scope) =>
+          scope.skillId === "uncertain"
+            ? {
+                ...approved(scope),
+                status: "uncertain",
+                summary: "The implementation is unavailable for review.",
+              }
+            : approved(scope),
+        ),
+      }),
+    };
+
+    const result = await context.makeUpdater(reviewer).update();
+
+    assert.equal(result.review?.status, "approved_with_exclusions");
+    assert.deepEqual(result.review?.enabledSkills, ["example"]);
+    assert.deepEqual(result.review?.excludedSkills, ["dependent", "uncertain"]);
+    assert.equal(
+      result.review?.skills.find((skill) => skill.skillId === "dependent")
+        ?.status,
+      "approved",
+    );
+  } finally {
+    context.store.close();
+    makeWritable(context.root);
+    rmSync(context.root, { recursive: true, force: true });
+  }
+});
+
+test("propagates exclusions through an explicit dependency cycle", async () => {
+  const context = fixture();
+  try {
+    commitAndPush(context.source, "add dependency cycle", () => {
+      mkdirSync(join(context.source, "cycle-a"));
+      mkdirSync(join(context.source, "cycle-b"));
+      writeFileSync(
+        join(context.source, "cycle-a", "SKILL.md"),
+        "# Cycle A\nRuns its local implementation.\n",
+      );
+      writeFileSync(
+        join(context.source, "cycle-a", "helper.py"),
+        'helper = "../cycle-b/helper.py"\n',
+      );
+      writeFileSync(
+        join(context.source, "cycle-b", "SKILL.md"),
+        "# Cycle B\nRuns its local implementation.\n",
+      );
+      writeFileSync(
+        join(context.source, "cycle-b", "helper.py"),
+        'helper = "../cycle-a/helper.py"\n',
+      );
+    });
+    const reviewer: CandidateReviewerLike = {
+      review: async (_candidateDirectory, scopes) => ({
+        reviews: scopes.map((scope) =>
+          scope.skillId === "cycle-b"
+            ? {
+                ...approved(scope),
+                status: "uncertain",
+                summary: "Cycle B cannot be approved.",
+              }
+            : approved(scope),
+        ),
+      }),
+    };
+
+    const result = await context.makeUpdater(reviewer).update();
+
+    assert.deepEqual(result.review?.enabledSkills, ["example"]);
+    assert.deepEqual(result.review?.excludedSkills, ["cycle-a", "cycle-b"]);
+  } finally {
+    context.store.close();
+    makeWritable(context.root);
+    rmSync(context.root, { recursive: true, force: true });
+  }
+});
+
+test("continues after an uncertain first batch with bounded concurrency", async () => {
+  const context = fixture();
+  try {
+    context.policy.behaviorReview.batchSize = 1;
+    context.policy.behaviorReview.maxConcurrency = 3;
+    const addedSkillIds = [
+      "a-uncertain",
+      "b-approved",
+      "c-approved",
+      "d-approved",
+    ];
+    commitAndPush(context.source, "add review batches", () => {
+      for (const skillId of addedSkillIds) {
+        mkdirSync(join(context.source, skillId));
+        writeFileSync(
+          join(context.source, skillId, "SKILL.md"),
+          skillId === "a-uncertain"
+            ? "# Uncertain\nRequires an implementation that is not in this repository.\n"
+            : `# ${skillId}\nUses only public information.\n`,
+        );
+      }
+    });
+    let activeReviews = 0;
+    let maximumActiveReviews = 0;
+    const reviewedSkillIds: string[] = [];
+    const reviewer: CandidateReviewerLike = {
+      review: async (_candidateDirectory, scopes) => {
+        assert.equal(scopes.length, 1);
+        reviewedSkillIds.push(scopes[0]!.skillId);
+        activeReviews += 1;
+        maximumActiveReviews = Math.max(maximumActiveReviews, activeReviews);
+        await new Promise((resolve) => setTimeout(resolve, 10));
+        activeReviews -= 1;
+        return {
+          reviews: scopes.map((scope) =>
+            scope.skillId === "a-uncertain"
+              ? {
+                  ...approved(scope),
+                  status: "uncertain",
+                  summary: "The implementation is unavailable for review.",
+                }
+              : approved(scope),
+          ),
+        };
+      },
+    };
+
+    const result = await context.makeUpdater(reviewer).update();
+
+    assert.equal(result.status, "promoted");
+    assert.equal(result.review?.status, "approved_with_exclusions");
+    assert.equal(reviewedSkillIds[0], "a-uncertain");
+    assert.deepEqual([...reviewedSkillIds].sort(), [
+      "a-uncertain",
+      "b-approved",
+      "c-approved",
+      "d-approved",
+      "example",
+    ]);
+    assert.equal(maximumActiveReviews, 3);
+    assert.deepEqual(result.review?.enabledSkills, [
+      "b-approved",
+      "c-approved",
+      "d-approved",
+      "example",
+    ]);
+    assert.deepEqual(result.review?.excludedSkills, ["a-uncertain"]);
+    assert.equal(context.store.getKSkillActiveState().activeSha, result.sha);
+  } finally {
+    context.store.close();
+    makeWritable(context.root);
+    rmSync(context.root, { recursive: true, force: true });
+  }
+});
+
 test("reuses a rejected digest without spending more review tokens", async () => {
   const context = fixture();
   try {
@@ -243,7 +431,7 @@ test("reuses a rejected digest without spending more review tokens", async () =>
     };
     await assert.rejects(
       context.makeUpdater(rejectingReviewer).update(),
-      /rejected/u,
+      /approved skill set/u,
     );
     assert.equal(rejectingCalls, 1);
     assert.equal(
@@ -257,7 +445,7 @@ test("reuses a rejected digest without spending more review tokens", async () =>
     });
     await assert.rejects(
       context.makeUpdater(rejectingReviewer).update(),
-      /cached skill behavior review/u,
+      /approved skill set/u,
     );
     assert.equal(rejectingCalls, 1);
   } finally {

@@ -6,7 +6,7 @@
 - Telegram Bot API가 제공한 private chat의 숫자 `user_id`
 - 로컬 관리자가 등록한 allowlist
 - 로딩 안전 조건과 스킬별 동작 검토를 통과해 content digest가 고정된
-  active `k-skill` release
+  active `k-skill` release의 `enabledSkills`
 
 ## 신뢰하지 않는 것
 
@@ -38,13 +38,22 @@ read-only로 읽어 개인정보 접근·외부 전송·credential 요구·명�
 결과와 거부 결과를 모두 재사용하므로 같은 후보를 nightly update가 반복해도
 LLM 검토를 반복하지 않는다.
 
+검토가 완결되고 승인된 스킬이 하나 이상이면 release를 만들 수 있다.
+`approved`만 `enabledSkills`에 등록하며 `uncertain`과 `rejected`는
+`excludedSkills`로 남긴다. Capability Broker는 active release의
+`enabledSkills`에 없는 스킬을 선택하거나 실행하지 않는다. 검토 중단처럼
+전체 결과가 불완전하거나 승인된 스킬이 하나도 없는 후보는 승격하지 않는다.
+
 서비스 credential은 normal state와 분리된 encrypted vault에 저장한다.
 각 값은 AES-256-GCM으로 principal과 credential/version metadata에
 인증 결합되며, WSL2 host의 master key는 Windows DPAPI `CurrentUser`로
 감싼 값만 vault 밖의 owner-only keyring에 저장한다. Secret Broker socket은
-metadata만 반환하고 secret value를 반환하는 API가 없다. Phase 6의
-credentialed operation에서도 Codex가 secret 평문을 보거나 복호화하지
-않고, broker 내부의 allowlisted handler가 pinned helper에만 잠시 주입한다.
+metadata만 반환하고 secret value를 반환하는 API가 없다. Phase 6의 공통
+Capability Broker에서도 Codex가 secret 평문을 보거나 복호화하지 않는다.
+Broker는 Telegram principal, 승인 스킬 allowlist, provider credential
+field mapping과 action policy를 검증한 뒤 필요한 값만 pinned helper에
+잠시 주입한다. helper 결과는 구조화하고 중앙 redaction을 거친 뒤 Codex와
+Telegram에 전달한다.
 
 ## 방어 범위
 

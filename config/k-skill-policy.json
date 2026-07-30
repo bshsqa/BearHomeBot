@@ -14,7 +14,8 @@
   "behaviorReview": {
     "policyVersion": 1,
     "timeoutSeconds": 600,
-    "batchSize": 8
+    "batchSize": 8,
+    "maxConcurrency": 3
   },
   "release": {
     "minimumRetained": 3

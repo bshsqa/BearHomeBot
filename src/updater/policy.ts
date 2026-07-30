@@ -18,6 +18,7 @@ export interface KSkillPolicy {
     policyVersion: number;
     timeoutSeconds: number;
     batchSize: number;
+    maxConcurrency: number;
   };
   release: {
     minimumRetained: number;
@@ -136,7 +137,7 @@ function parsePolicy(value: unknown): KSkillPolicy {
   );
   requireExactKeys(
     behaviorReview,
-    ["policyVersion", "timeoutSeconds", "batchSize"],
+    ["policyVersion", "timeoutSeconds", "batchSize", "maxConcurrency"],
     "policy.behaviorReview",
   );
 
@@ -201,6 +202,13 @@ function parsePolicy(value: unknown): KSkillPolicy {
         "policy.behaviorReview",
         1,
         25,
+      ),
+      maxConcurrency: requireInteger(
+        behaviorReview,
+        "maxConcurrency",
+        "policy.behaviorReview",
+        1,
+        16,
       ),
     },
     release: {

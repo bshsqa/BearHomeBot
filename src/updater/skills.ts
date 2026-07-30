@@ -5,20 +5,24 @@ import { join, posix, resolve } from "node:path";
 import type { CandidateManifest } from "./gates.js";
 
 const SKILL_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/u;
+export const SKILL_SCOPE_VERSION = 3;
 
 export interface SkillReviewScope {
   skillId: string;
   contentDigest: string;
   files: string[];
+  dependencies: string[];
 }
 
 export interface SkillInventoryItem {
   skillId: string;
   contentDigest: string;
   fileCount: number;
+  dependencies: string[];
 }
 
 export interface BehaviorReviewPlan {
+  scopeVersion: typeof SKILL_SCOPE_VERSION;
   policyVersion: number;
   initialBaseline: boolean;
   totalSkills: number;
@@ -61,16 +65,111 @@ function listFiles(root: string): string[] {
   return files;
 }
 
-function referencedBySkill(
-  skillText: string,
-  skillId: string,
-  path: string,
+function containsExactReference(
+  text: string,
+  reference: string,
+  allowSubpath = false,
 ): boolean {
-  const relative = posix.relative(skillId, path);
+  let index = text.indexOf(reference);
+  while (index !== -1) {
+    const before = index === 0 ? "" : text[index - 1]!;
+    const after =
+      index + reference.length === text.length
+        ? ""
+        : text[index + reference.length]!;
+    if (
+      (!before || !/[A-Za-z0-9@/._+-]/u.test(before)) &&
+      (!after ||
+        !/[A-Za-z0-9@/._+-]/u.test(after) ||
+        (allowSubpath && after === "/"))
+    ) {
+      return true;
+    }
+    index = text.indexOf(reference, index + reference.length);
+  }
+  return false;
+}
+
+function containsExactIdentifier(text: string, identifier: string): boolean {
+  let index = text.indexOf(identifier);
+  while (index !== -1) {
+    const before = index === 0 ? "" : text[index - 1]!;
+    const after =
+      index + identifier.length === text.length
+        ? ""
+        : text[index + identifier.length]!;
+    if (
+      (!before || !/[A-Za-z0-9._-]/u.test(before)) &&
+      (!after || !/[A-Za-z0-9._-]/u.test(after))
+    ) {
+      return true;
+    }
+    index = text.indexOf(identifier, index + identifier.length);
+  }
+  return false;
+}
+
+function referencedPaths(
+  sourcePath: string,
+  skillId: string,
+  text: string,
+): Set<string> {
+  const references = new Set<string>();
+  const pattern =
+    /(?:\.{1,2}|[A-Za-z0-9@._+-]+)(?:\/(?:\.{1,2}|[A-Za-z0-9@._+-]+))+/gu;
+  for (const match of text.matchAll(pattern)) {
+    const reference = match[0];
+    const candidates = reference.startsWith(".")
+      ? [
+          posix.join(posix.dirname(sourcePath), reference),
+          posix.join(skillId, reference),
+        ]
+      : [
+          reference,
+          posix.join(posix.dirname(sourcePath), reference),
+          posix.join(skillId, reference),
+        ];
+    for (const candidate of candidates) {
+      const normalized = posix.normalize(candidate);
+      if (
+        normalized !== "." &&
+        !posix.isAbsolute(normalized) &&
+        normalized !== ".." &&
+        !normalized.startsWith("../")
+      ) {
+        references.add(normalized);
+      }
+    }
+  }
+  return references;
+}
+
+function searchableText(
+  root: string,
+  path: string,
+  cache: Map<string, string | undefined>,
+): string | undefined {
+  if (cache.has(path)) {
+    return cache.get(path);
+  }
+  const content = readFileSync(join(root, path));
+  const text = content.includes(0) ? undefined : content.toString("utf8");
+  cache.set(path, text);
+  return text;
+}
+
+function isSkillRuntimeImplementation(path: string, skillId: string): boolean {
+  if (!path.startsWith(`${skillId}/`)) {
+    return false;
+  }
+  const relative = path.slice(skillId.length + 1);
   return (
-    skillText.includes(path) ||
-    skillText.includes(relative) ||
-    skillText.includes(`./${relative}`)
+    relative !== "SKILL.md" &&
+    !relative.startsWith("tests/") &&
+    !relative.startsWith("test/") &&
+    !/(?:^|\/)test_[^/]+$/u.test(relative) &&
+    !/(?:^|\/)[^/]+\.test\.[^/]+$/u.test(relative) &&
+    !/\.(?:md|txt|hwp|hwpx|pdf|html|csv)$/iu.test(relative)
   );
 }
 
@@ -145,18 +244,20 @@ function addPackageTree(
   root: string,
   packageRoot: string,
   knownPackages: ReadonlyMap<string, string>,
-  roots: Set<string>,
+  roots: Map<string, boolean>,
+  hardReachable: boolean,
 ): void {
-  if (roots.has(packageRoot)) {
+  const existingStrength = roots.get(packageRoot);
+  if (existingStrength === true || existingStrength === hardReachable) {
     return;
   }
-  roots.add(packageRoot);
+  roots.set(packageRoot, hardReachable);
   for (const dependency of localPackageDependencies(
     root,
     packageRoot,
     knownPackages,
   )) {
-    addPackageTree(root, dependency, knownPackages, roots);
+    addPackageTree(root, dependency, knownPackages, roots, hardReachable);
   }
 }
 
@@ -193,38 +294,158 @@ export function discoverSkillReviewScopes(
     throw new Error("Candidate does not contain any top-level skills");
   }
 
+  const skillIdSet = new Set(skillIds);
   const knownPackages = packageNames(root, files);
+  const knownPackageRoots = new Set(knownPackages.values());
+  const fileSet = new Set(files);
+  const textCache = new Map<string, string | undefined>();
   return skillIds.map((skillId) => {
-    const skillText = readFileSync(join(root, skillId, "SKILL.md"), "utf8");
-    const roots = new Set<string>([skillId]);
+    const roots = new Map<string, boolean>([[skillId, true]]);
+    const dependencies = new Set<string>();
+    const explicitlyReferencedFiles = new Map<string, boolean>();
+    const addSkillScope = (
+      relatedSkillId: string,
+      hardDependency: boolean,
+    ): void => {
+      if (relatedSkillId === skillId) {
+        return;
+      }
+      if (hardDependency) {
+        dependencies.add(relatedSkillId);
+      }
+      const existingStrength = roots.get(relatedSkillId);
+      if (existingStrength !== true) {
+        roots.set(relatedSkillId, hardDependency);
+      }
+      const relatedPackage = `packages/${relatedSkillId}`;
+      if (files.some((path) => path.startsWith(`${relatedPackage}/`))) {
+        addPackageTree(
+          root,
+          relatedPackage,
+          knownPackages,
+          roots,
+          hardDependency,
+        );
+      }
+    };
+    const addExplicitFile = (path: string, hardReachable: boolean): void => {
+      const existingStrength = explicitlyReferencedFiles.get(path);
+      if (existingStrength !== true) {
+        explicitlyReferencedFiles.set(path, hardReachable);
+      }
+    };
     const pairedPackage = `packages/${skillId}`;
     if (files.some((path) => path.startsWith(`${pairedPackage}/`))) {
-      addPackageTree(root, pairedPackage, knownPackages, roots);
+      addPackageTree(root, pairedPackage, knownPackages, roots, true);
     }
 
-    for (const packageRoot of new Set(knownPackages.values())) {
-      if (
-        skillText.includes(packageRoot) ||
-        skillText.includes(posix.relative(skillId, packageRoot))
-      ) {
-        addPackageTree(root, packageRoot, knownPackages, roots);
+    const scannedFiles = new Map<string, boolean>();
+    let scopeFiles: string[] = [];
+    while (true) {
+      const strengthByFile = new Map<string, boolean>();
+      scopeFiles = files.filter((path) => {
+        let included = false;
+        let hardReachable = false;
+        if (explicitlyReferencedFiles.has(path)) {
+          included = true;
+          hardReachable = explicitlyReferencedFiles.get(path) === true;
+        }
+        for (const [scopeRoot, rootIsHardReachable] of roots) {
+          if (path === scopeRoot || path.startsWith(`${scopeRoot}/`)) {
+            included = true;
+            hardReachable ||= rootIsHardReachable;
+          }
+        }
+        if (included) {
+          strengthByFile.set(path, hardReachable);
+        }
+        return included;
+      });
+      const pendingFiles = scopeFiles.filter((path) => {
+        const currentStrength = strengthByFile.get(path) === true;
+        const scannedStrength = scannedFiles.get(path);
+        return (
+          scannedStrength === undefined || (!scannedStrength && currentStrength)
+        );
+      });
+      if (pendingFiles.length === 0) {
+        break;
+      }
+      for (const path of pendingFiles) {
+        const hardReachable = strengthByFile.get(path) === true;
+        scannedFiles.set(path, hardReachable);
+        const text = searchableText(root, path, textCache);
+        if (text === undefined) {
+          continue;
+        }
+        const sourceSkillId = path.split("/", 1)[0]!;
+        const canDeclareHardDependency =
+          hardReachable &&
+          skillIdSet.has(sourceSkillId) &&
+          (sourceSkillId === skillId || dependencies.has(sourceSkillId)) &&
+          isSkillRuntimeImplementation(path, sourceSkillId);
+        const pathReferences = referencedPaths(path, skillId, text);
+        for (const reference of pathReferences) {
+          if (fileSet.has(reference)) {
+            addExplicitFile(reference, hardReachable);
+          }
+          const referencedSkillId = reference.split("/", 1)[0]!;
+          if (
+            referencedSkillId !== sourceSkillId &&
+            skillIdSet.has(referencedSkillId)
+          ) {
+            addSkillScope(referencedSkillId, canDeclareHardDependency);
+          }
+          for (const packageRoot of knownPackageRoots) {
+            if (
+              reference === packageRoot ||
+              reference.startsWith(`${packageRoot}/`)
+            ) {
+              addPackageTree(
+                root,
+                packageRoot,
+                knownPackages,
+                roots,
+                hardReachable,
+              );
+            }
+          }
+        }
+        for (const [packageName, packageRoot] of knownPackages) {
+          if (
+            containsExactReference(text, packageName, true) ||
+            containsExactReference(text, packageRoot, true)
+          ) {
+            addPackageTree(
+              root,
+              packageRoot,
+              knownPackages,
+              roots,
+              hardReachable,
+            );
+          }
+        }
+        if (sourceSkillId === skillId || dependencies.has(sourceSkillId)) {
+          for (const relatedSkillId of skillIds) {
+            if (
+              relatedSkillId !== sourceSkillId &&
+              containsExactIdentifier(text, relatedSkillId)
+            ) {
+              addSkillScope(relatedSkillId, canDeclareHardDependency);
+            }
+          }
+        }
       }
     }
-
-    const scopeFiles = files
-      .filter(
-        (path) =>
-          [...roots].some(
-            (scopeRoot) =>
-              path === scopeRoot || path.startsWith(`${scopeRoot}/`),
-          ) || referencedBySkill(skillText, skillId, path),
-      )
-      .sort((left, right) => left.localeCompare(right, "en"));
+    scopeFiles.sort((left, right) => left.localeCompare(right, "en"));
 
     return {
       skillId,
       contentDigest: digestScope(root, skillId, scopeFiles),
       files: scopeFiles,
+      dependencies: [...dependencies].sort((left, right) =>
+        left.localeCompare(right, "en"),
+      ),
     };
   });
 }
@@ -256,7 +477,14 @@ function priorInventory(
       typeof record.contentDigest !== "string" ||
       !/^[0-9a-f]{64}$/u.test(record.contentDigest) ||
       !Number.isSafeInteger(record.fileCount) ||
-      (record.fileCount as number) < 1
+      (record.fileCount as number) < 1 ||
+      (record.dependencies !== undefined &&
+        (!Array.isArray(record.dependencies) ||
+          record.dependencies.some(
+            (dependency) =>
+              typeof dependency !== "string" ||
+              !SKILL_ID_PATTERN.test(dependency),
+          )))
     ) {
       return undefined;
     }
@@ -264,6 +492,7 @@ function priorInventory(
       skillId: record.skillId,
       contentDigest: record.contentDigest,
       fileCount: record.fileCount as number,
+      dependencies: (record.dependencies as string[] | undefined) ?? [],
     });
   }
   return result;
@@ -301,6 +530,7 @@ export function buildReviewedCandidateManifest(
   return {
     ...manifest,
     behaviorReview: {
+      scopeVersion: SKILL_SCOPE_VERSION,
       policyVersion,
       initialBaseline: previous === undefined,
       totalSkills: scopes.length,
@@ -312,6 +542,7 @@ export function buildReviewedCandidateManifest(
         skillId: scope.skillId,
         contentDigest: scope.contentDigest,
         fileCount: scope.files.length,
+        dependencies: scope.dependencies,
       })),
     },
   };

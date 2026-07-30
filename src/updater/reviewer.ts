@@ -113,12 +113,14 @@ export interface BehaviorReviewExecution {
 }
 
 export interface CandidateBehaviorReview {
-  status: "approved" | "rejected" | "uncertain";
+  status: "approved" | "approved_with_exclusions" | "rejected";
   summary: string;
   policyVersion: number;
   totalSkills: number;
   reviewedSkills: string[];
   reusedSkills: string[];
+  enabledSkills: string[];
+  excludedSkills: string[];
   skills: Array<SkillBehaviorReview & { source: "reviewed" | "cache" }>;
   usage?: CodexUsage;
 }
@@ -294,6 +296,7 @@ function buildReviewPrompt(
         skillId: scope.skillId,
         contentDigest: scope.contentDigest,
         files: scope.files,
+        dependencies: scope.dependencies,
       })),
       null,
       2,

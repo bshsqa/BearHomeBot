@@ -205,6 +205,41 @@ test("promotes validated k-skill releases and rolls back atomically", () => {
   }
 });
 
+test("refreshes review metadata for the active SHA atomically", () => {
+  const store = createStore();
+  const sha = "a".repeat(40);
+  try {
+    store.recordKSkillCandidate({
+      sha,
+      treeSha: "1".repeat(40),
+      sourceUrl: "https://github.com/NomaDamas/k-skill.git",
+      sourceBranch: "main",
+      manifest: { scopeVersion: 1 },
+    });
+    store.markKSkillCandidateValidated({
+      sha,
+      releasePath: `/releases/${sha}-p1-s1`,
+      review: { enabledSkills: ["old"] },
+    });
+    store.promoteKSkillRelease(sha);
+
+    const refreshed = store.refreshActiveKSkillRelease({
+      sha,
+      releasePath: `/releases/${sha}-p1-s2`,
+      manifest: { scopeVersion: 2 },
+      review: { enabledSkills: ["new"] },
+    });
+
+    assert.equal(refreshed.status, "active");
+    assert.equal(refreshed.releasePath, `/releases/${sha}-p1-s2`);
+    assert.deepEqual(refreshed.manifest, { scopeVersion: 2 });
+    assert.deepEqual(refreshed.review, { enabledSkills: ["new"] });
+    assert.equal(store.getKSkillActiveState().activeSha, sha);
+  } finally {
+    store.close();
+  }
+});
+
 test("records rejected k-skill candidates without release content", () => {
   const store = createStore();
   const sha = "c".repeat(40);

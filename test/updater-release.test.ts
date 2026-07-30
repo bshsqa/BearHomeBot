@@ -7,6 +7,8 @@ import {
   readFileSync,
   readdirSync,
   rmSync,
+  symlinkSync,
+  unlinkSync,
   writeFileSync,
 } from "node:fs";
 import { execFileSync } from "node:child_process";
@@ -17,7 +19,11 @@ import test from "node:test";
 import { inspectCandidate } from "../src/updater/gates.js";
 import { KSkillGitMirror } from "../src/updater/git.js";
 import { loadKSkillPolicy, type KSkillPolicy } from "../src/updater/policy.js";
-import { KSkillReleaseManager } from "../src/updater/release.js";
+import {
+  KSkillReleaseManager,
+  type ReleaseMetadata,
+} from "../src/updater/release.js";
+import type { CandidateBehaviorReview } from "../src/updater/reviewer.js";
 import {
   buildReviewedCandidateManifest,
   discoverSkillReviewScopes,
@@ -50,7 +56,7 @@ function makeWritable(root: string): void {
   }
 }
 
-test("materializes a fresh immutable release and detects later mutation", async () => {
+test("retries equivalent security metadata and rejects stale release state", async () => {
   const root = mkdtempSync(join(tmpdir(), "bearhomebot-release-"));
   const remote = join(root, "remote.git");
   const source = join(root, "source");
@@ -77,7 +83,16 @@ test("materializes a fresh immutable release and detects later mutation", async 
   );
   writeFileSync(join(source, "README.md"), "trusted source\n");
   mkdirSync(join(source, "example"));
-  writeFileSync(join(source, "example", "SKILL.md"), "# Example\n");
+  mkdirSync(join(source, "provider"));
+  writeFileSync(
+    join(source, "example", "SKILL.md"),
+    "# Example\nRuns its local implementation.\n",
+  );
+  writeFileSync(
+    join(source, "example", "run.py"),
+    'provider = "../provider/SKILL.md"\n',
+  );
+  writeFileSync(join(source, "provider", "SKILL.md"), "# Provider\n");
   git(source, "add", "-A");
   git(source, "commit", "--quiet", "-m", "initial");
   git(source, "branch", "-M", "main");
@@ -96,6 +111,7 @@ test("materializes a fresh immutable release and detects later mutation", async 
     now: () => new Date("2026-07-30T10:00:00.000Z"),
   });
   let releasePath: string | undefined;
+  let symlinkReleasePath: string | undefined;
 
   try {
     const candidate = await mirror.fetchCandidate();
@@ -120,30 +136,46 @@ test("materializes a fresh immutable release and detects later mutation", async 
     writeFileSync(join(reviewPath, "README.md"), "review mutation\n");
     manager.removeReviewDirectory(reviewPath);
 
+    const digestBySkillId = new Map(
+      scopes.map((scope) => [scope.skillId, scope.contentDigest]),
+    );
+    const behaviorReview: CandidateBehaviorReview = {
+      status: "approved",
+      summary: "Approved.",
+      policyVersion: 1,
+      totalSkills: 2,
+      reviewedSkills: ["example", "provider"],
+      reusedSkills: [],
+      enabledSkills: ["example", "provider"],
+      excludedSkills: [],
+      skills: [
+        {
+          skillId: "example",
+          contentDigest: digestBySkillId.get("example")!,
+          status: "approved",
+          summary: "Approved.",
+          dataAccess: [],
+          networkDestinations: [],
+          findings: [],
+          source: "reviewed",
+        },
+        {
+          skillId: "provider",
+          contentDigest: digestBySkillId.get("provider")!,
+          status: "approved",
+          summary: "Approved.",
+          dataAccess: [],
+          networkDestinations: [],
+          findings: [],
+          source: "reviewed",
+        },
+      ],
+    };
     const release = await manager.finalizeRelease(
       mirror,
       candidate,
       reviewedManifest,
-      {
-        status: "approved",
-        summary: "Approved.",
-        policyVersion: 1,
-        totalSkills: 1,
-        reviewedSkills: ["example"],
-        reusedSkills: [],
-        skills: [
-          {
-            skillId: "example",
-            contentDigest: scopes[0]!.contentDigest,
-            status: "approved",
-            summary: "Approved.",
-            dataAccess: [],
-            networkDestinations: [],
-            findings: [],
-            source: "reviewed",
-          },
-        ],
-      },
+      behaviorReview,
     );
     releasePath = release.path;
 
@@ -154,10 +186,171 @@ test("materializes a fresh immutable release and detects later mutation", async 
     assert.equal(lstatSync(join(release.path, "README.md")).mode & 0o222, 0);
     assert.equal(manager.verifyRelease(release.path).sha, candidate.sha);
 
+    const retry = await manager.finalizeRelease(
+      mirror,
+      candidate,
+      {
+        ...reviewedManifest,
+        source: {
+          ...reviewedManifest.source,
+          previousSha: "c".repeat(40),
+        },
+        changes: {
+          count: 0,
+          paths: [],
+        },
+        loaderSafety: {
+          ...reviewedManifest.loaderSafety,
+          checkedAt: "2026-07-30T11:00:00.000Z",
+        },
+        behaviorReview: {
+          ...reviewedManifest.behaviorReview,
+          initialBaseline: false,
+          added: [],
+          changed: [],
+          unchanged: ["example", "provider"],
+          removed: [],
+        },
+      },
+      {
+        ...behaviorReview,
+        summary: "Cache retry.",
+        reviewedSkills: [],
+        reusedSkills: ["example", "provider"],
+        usage: {
+          inputTokens: 0,
+          outputTokens: 0,
+        },
+        skills: behaviorReview.skills.map((skill) => ({
+          ...skill,
+          source: "cache",
+        })),
+      },
+    );
+    assert.equal(retry.path, release.path);
+    assert.equal(retry.metadata.validatedAt, release.metadata.validatedAt);
+
+    await assert.rejects(
+      manager.finalizeRelease(mirror, candidate, reviewedManifest, {
+        ...behaviorReview,
+        skills: behaviorReview.skills.map((skill) => ({
+          ...skill,
+          summary: "Stale per-skill review metadata.",
+        })),
+      }),
+      /does not match the requested release/u,
+    );
+    await assert.rejects(
+      manager.finalizeRelease(mirror, candidate, reviewedManifest, {
+        ...behaviorReview,
+        enabledSkills: [],
+        excludedSkills: ["example", "provider"],
+        status: "rejected",
+      }),
+      /does not enable any skills/u,
+    );
+    await assert.rejects(
+      manager.finalizeRelease(mirror, candidate, reviewedManifest, {
+        ...behaviorReview,
+        skills: behaviorReview.skills.map((skill) => ({
+          ...skill,
+          status: "uncertain",
+        })),
+      }),
+      /enables a skill that is not approved/u,
+    );
+    await assert.rejects(
+      manager.finalizeRelease(mirror, candidate, reviewedManifest, {
+        ...behaviorReview,
+        skills: behaviorReview.skills.map((skill) => ({
+          ...skill,
+          contentDigest: "f".repeat(64),
+        })),
+      }),
+      /skill digest is inconsistent/u,
+    );
+
+    const marker = join(release.path, ".bearhomebot-release.json");
+    const originalMetadata = JSON.parse(
+      readFileSync(marker, "utf8"),
+    ) as ReleaseMetadata;
+    chmodSync(marker, 0o600);
+    writeFileSync(
+      marker,
+      `${JSON.stringify({
+        ...originalMetadata,
+        review: {
+          ...originalMetadata.review,
+          excludedSkills: ["example"],
+        },
+      })}\n`,
+    );
+    assert.throws(
+      () => manager.verifyRelease(release.path),
+      /does not uniquely partition/u,
+    );
+    writeFileSync(
+      marker,
+      `${JSON.stringify({
+        ...originalMetadata,
+        review: {
+          ...originalMetadata.review,
+          status: "approved_with_exclusions",
+          enabledSkills: ["example"],
+          excludedSkills: ["provider"],
+        },
+      })}\n`,
+    );
+    assert.throws(
+      () => manager.verifyRelease(release.path),
+      /excluded dependency/u,
+    );
+    writeFileSync(
+      marker,
+      `${JSON.stringify({
+        ...originalMetadata,
+        review: {
+          ...originalMetadata.review,
+          skills: originalMetadata.review.skills.map((skill) => ({
+            ...skill,
+            status: "uncertain",
+          })),
+        },
+      })}\n`,
+    );
+    assert.throws(
+      () => manager.verifyRelease(release.path),
+      /enables a skill that is not approved/u,
+    );
+    writeFileSync(
+      marker,
+      `${JSON.stringify({
+        ...originalMetadata,
+        review: {
+          ...originalMetadata.review,
+          unexpected: true,
+        },
+      })}\n`,
+    );
+    assert.throws(
+      () => manager.verifyRelease(release.path),
+      /fields are invalid/u,
+    );
+    writeFileSync(marker, `${JSON.stringify(originalMetadata, null, 2)}\n`);
+    chmodSync(marker, 0o400);
+
+    const linkedRelease = join(releaseRoot, "f".repeat(40));
+    symlinkReleasePath = linkedRelease;
+    symlinkSync(release.path, linkedRelease, "dir");
+    assert.throws(() => manager.verifyRelease(linkedRelease), /symbolic link/u);
+
     chmodSync(join(release.path, "README.md"), 0o600);
     writeFileSync(join(release.path, "README.md"), "tampered\n");
     assert.throws(() => manager.verifyRelease(release.path), /content digest/u);
   } finally {
+    if (symlinkReleasePath) {
+      unlinkSync(symlinkReleasePath);
+    }
     if (releasePath) {
       makeWritable(releasePath);
     }
