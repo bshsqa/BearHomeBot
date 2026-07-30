@@ -7,6 +7,7 @@ export interface RuntimePaths {
   dataDir: string;
   cacheDir: string;
   stateDatabase: string;
+  codexWorkspace: string;
   releaseRoot: string;
 }
 
@@ -72,6 +73,7 @@ export function resolveRuntimePaths(
     dataDir,
     cacheDir,
     stateDatabase: join(dataDir, "state.sqlite"),
+    codexWorkspace: join(dataDir, "codex-workspace"),
     releaseRoot: join(dataDir, "k-skill", "releases"),
   };
 }
@@ -80,10 +82,14 @@ export async function ensureRuntimeDirectories(
   paths: RuntimePaths,
 ): Promise<void> {
   await Promise.all(
-    [paths.configDir, paths.dataDir, paths.cacheDir, paths.releaseRoot].map(
-      async (directory) => {
-        await mkdir(directory, { recursive: true, mode: 0o700 });
-      },
-    ),
+    [
+      paths.configDir,
+      paths.dataDir,
+      paths.cacheDir,
+      paths.codexWorkspace,
+      paths.releaseRoot,
+    ].map(async (directory) => {
+      await mkdir(directory, { recursive: true, mode: 0o700 });
+    }),
   );
 }
