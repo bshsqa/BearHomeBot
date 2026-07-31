@@ -39,6 +39,7 @@ fi
 
 BEARHOMEBOT_TELEGRAM_TOKEN=""
 BEARHOMEBOT_TELEGRAM_ALLOWED_USER_IDS=""
+BEARHOMEBOT_TELEGRAM_OWNER_USER_ID=""
 while IFS='=' read -r key value; do
   case "$key" in
     BEARHOMEBOT_TELEGRAM_TOKEN)
@@ -46,6 +47,9 @@ while IFS='=' read -r key value; do
       ;;
     BEARHOMEBOT_TELEGRAM_ALLOWED_USER_IDS)
       BEARHOMEBOT_TELEGRAM_ALLOWED_USER_IDS="$value"
+      ;;
+    BEARHOMEBOT_TELEGRAM_OWNER_USER_ID)
+      BEARHOMEBOT_TELEGRAM_OWNER_USER_ID="$value"
       ;;
   esac
 done <"$CONFIG_FILE"
@@ -61,9 +65,26 @@ if [[
   printf 'Telegram configuration contains invalid allowed user IDs.\n' >&2
   exit 1
 fi
+if [[
+  -n "$BEARHOMEBOT_TELEGRAM_OWNER_USER_ID" &&
+  ! "$BEARHOMEBOT_TELEGRAM_OWNER_USER_ID" =~ ^[0-9]+$
+]]; then
+  printf 'Telegram configuration contains an invalid owner user ID.\n' >&2
+  exit 1
+fi
+if [[ -n "$BEARHOMEBOT_TELEGRAM_OWNER_USER_ID" ]]; then
+  case ",$BEARHOMEBOT_TELEGRAM_ALLOWED_USER_IDS," in
+    *",$BEARHOMEBOT_TELEGRAM_OWNER_USER_ID,"*) ;;
+    *)
+      printf 'Telegram owner must also be in the allowlist.\n' >&2
+      exit 1
+      ;;
+  esac
+fi
 
 export BEARHOMEBOT_TELEGRAM_TOKEN
 export BEARHOMEBOT_TELEGRAM_ALLOWED_USER_IDS
+export BEARHOMEBOT_TELEGRAM_OWNER_USER_ID
 exec node \
   --no-network-family-autoselection \
   --dns-result-order=ipv4first \

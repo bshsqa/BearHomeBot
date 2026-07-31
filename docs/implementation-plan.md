@@ -115,6 +115,8 @@ DB로 복사하거나 암호화·복호화하지 않는다.
 - `/renamesession`은 표시 이름만 바꾼다.
 - `/endsession`은 active association만 해제한다.
 - `/cancel`은 현재 실행 중인 Codex child를 종료한다.
+- `/shutdown`은 소유자에게 일회용 확인 버튼을 보여준 뒤 gateway 전체를
+  정상 종료한다.
 - active session이 없으면 첫 일반 메시지로 session을 자동 생성한다.
 - SQLite에는 thread ID와 metadata만 저장한다.
 - 대화 원문, 답변 원문과 compaction은 Codex가 관리한다.
@@ -129,6 +131,7 @@ DB로 복사하거나 암호화·복호화하지 않는다.
 - long polling과 update deduplication
 - Telegram message 분할과 callback 처리
 - `/features`, `/health`, `/whoami`
+- 소유자 전용 `/shutdown`과 2분짜리 일회용 확인
 
 ### Phase 2: Codex session
 

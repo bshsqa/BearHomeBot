@@ -67,6 +67,10 @@ codex login
 ./scripts/start-telegram.sh
 ```
 
+처음 등록한 허용 사용자는 BearHomeBot 소유자가 된다. 소유자만
+`/shutdown`으로 현재 호스트의 gateway를 원격 종료할 수 있다. 이후
+가족 사용자를 추가해도 소유자는 바뀌지 않는다.
+
 `install.sh`는 BearHomeBot 의존성을 설치하고 `k-skill/`이 없으면
 `NomaDamas/k-skill`을 clone한다. 이미 있으면 fast-forward pull만 한다.
 
@@ -112,12 +116,18 @@ Codex는 요청을 받으면 필요에 따라 다음 순서로 동작한다.
 /features                기능 카테고리와 세부 기능 보기
 /health                  gateway와 실행 호스트 확인
 /whoami                  Telegram 숫자 사용자 ID 확인
+/shutdown                현재 gateway 종료 (소유자 전용, 확인 필요)
 ```
 
 `/features`는 여섯 개 카테고리 버튼을 보여준다. 카테고리를 누르면 관련
 스킬 이름, 용도와 주요 제약이 나오고 다시 카테고리 목록으로 돌아갈 수
 있다. 이 메뉴는 기능 안내만 담당하며, 실제 요청은 일반 메시지로 Codex에
 전달된다.
+
+`/shutdown`은 Codex를 호출하지 않는다. 소유자가 명령을 보내고 2분 안에
+종료 버튼을 누르면 완료 메시지를 먼저 전송한 뒤 진행 중인 Codex 작업과
+Telegram long polling을 종료한다. 오래되거나 이미 사용한 확인 버튼은
+다시 사용할 수 없다.
 
 선택된 세션이 없으면 첫 일반 메시지에서 새 세션을 자동 생성한다. 대화
 문맥과 compaction은 Codex thread가 관리하고, SQLite에는 사용자 소유권,

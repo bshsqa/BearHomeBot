@@ -44,6 +44,10 @@ try {
     client,
     store,
     runner,
+    ownerUserId: config.ownerUserId,
+    requestShutdown: () => {
+      abortController.abort();
+    },
   });
 
   await runTelegramBot(client, config, controller, abortController.signal);

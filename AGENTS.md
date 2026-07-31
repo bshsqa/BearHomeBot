@@ -38,6 +38,8 @@ Telegram-facing answer.
 
 - Preserve `/newsession`, `/sessions`, `/renamesession`, `/endsession`, and
   `/cancel` behavior.
+- Keep `/shutdown` owner-only, confirmation-gated, and handled directly by the
+  gateway without invoking Codex.
 - Keep `/features` as a static Telegram browsing menu. It must not decide which
   skill Codex may execute or rewrite ordinary user requests.
 - Keep session ownership bound to the Telegram numeric user ID.
@@ -49,6 +51,8 @@ Telegram-facing answer.
 ## Host Operation
 
 - Only one computer may long-poll the family Telegram bot token at a time.
+- Use owner-confirmed `/shutdown` before starting the same bot token on another
+  host.
 - The Telegram allowlist is the primary trust boundary. Every allowed user has
   effective local Codex and shell authority on the host.
 - Keep Telegram configuration, credentials, SQLite, `.runtime`, `k-skill/`, and

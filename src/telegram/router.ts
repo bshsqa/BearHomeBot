@@ -18,6 +18,16 @@ export type TelegramAction =
       kind: "cancel";
     })
   | (TelegramActionBase & {
+      kind: "cancel_shutdown";
+      callbackQueryId: string;
+      token: string;
+    })
+  | (TelegramActionBase & {
+      kind: "confirm_shutdown";
+      callbackQueryId: string;
+      token: string;
+    })
+  | (TelegramActionBase & {
       kind: "end_session";
     })
   | (TelegramActionBase & {
@@ -45,6 +55,9 @@ export type TelegramAction =
   | (TelegramActionBase & {
       kind: "rename_session";
       displayName?: string;
+    })
+  | (TelegramActionBase & {
+      kind: "request_shutdown";
     })
   | (TelegramActionBase & {
       kind: "reply";
@@ -88,6 +101,7 @@ export function telegramUpdateSenderId(
 export function routeTelegramUpdate(
   update: TelegramUpdate,
   allowedUserIds: ReadonlySet<string>,
+  ownerUserId?: string,
 ): TelegramAction | undefined {
   const callback = update.callback_query;
   if (callback) {
@@ -108,6 +122,29 @@ export function routeTelegramUpdate(
         kind: "answer_callback",
         callbackQueryId: callback.id,
         text: "승인되지 않은 사용자야.",
+      };
+    }
+
+    const shutdownMatch = /^shutdown:(confirm|cancel):([a-f0-9]{24})$/u.exec(
+      callback.data ?? "",
+    );
+    if (shutdownMatch?.[1] && shutdownMatch[2]) {
+      if (userId !== ownerUserId) {
+        return {
+          ...base,
+          kind: "answer_callback",
+          callbackQueryId: callback.id,
+          text: "봇 소유자만 이 호스트를 종료할 수 있어.",
+        };
+      }
+      return {
+        ...base,
+        kind:
+          shutdownMatch[1] === "confirm"
+            ? "confirm_shutdown"
+            : "cancel_shutdown",
+        callbackQueryId: callback.id,
+        token: shutdownMatch[2],
       };
     }
 
@@ -226,6 +263,15 @@ export function routeTelegramUpdate(
       kind: "reply",
       text: `BearHomeBot 연결 정상.\n호스트: ${hostname()}`,
     };
+  }
+  if (command?.name === "shutdown") {
+    return userId === ownerUserId
+      ? { ...base, kind: "request_shutdown" }
+      : {
+          ...base,
+          kind: "reply",
+          text: "봇 소유자만 이 호스트를 종료할 수 있어.",
+        };
   }
   if (command?.name === "features") {
     return { ...base, kind: "list_features" };

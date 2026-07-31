@@ -168,6 +168,59 @@ test("parses lowercase session commands and optional names", () => {
   );
 });
 
+test("routes shutdown only for the configured owner", () => {
+  const allowed = new Set(["1001", "1002"]);
+
+  assert.deepEqual(
+    routeTelegramUpdate(privateMessage("/shutdown"), allowed, "1001"),
+    {
+      kind: "request_shutdown",
+      updateId: 10,
+      userId: "1001",
+      chatId: 1001,
+    },
+  );
+
+  const denied = routeTelegramUpdate(
+    privateMessage("/shutdown", 1002),
+    allowed,
+    "1001",
+  );
+  assert.equal(denied?.kind, "reply");
+  if (denied?.kind === "reply") {
+    assert.match(denied.text, /소유자만/);
+  }
+});
+
+test("routes shutdown confirmation callbacks only for the owner", () => {
+  const token = "0123456789abcdef01234567";
+  const allowed = new Set(["1001", "1002"]);
+
+  assert.deepEqual(
+    routeTelegramUpdate(
+      sessionCallback(`shutdown:confirm:${token}`),
+      allowed,
+      "1001",
+    ),
+    {
+      kind: "confirm_shutdown",
+      updateId: 11,
+      userId: "1001",
+      chatId: 1001,
+      callbackQueryId: "callback-1",
+      token,
+    },
+  );
+  assert.equal(
+    routeTelegramUpdate(
+      sessionCallback(`shutdown:confirm:${token}`, 1002),
+      allowed,
+      "1001",
+    )?.kind,
+    "answer_callback",
+  );
+});
+
 test("routes owned-looking callback data as an untrusted session selection", () => {
   const action = routeTelegramUpdate(
     sessionCallback("session:42"),

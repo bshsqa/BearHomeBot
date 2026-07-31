@@ -54,6 +54,13 @@ codex login status
 
 기존 호스트에서:
 
+```text
+/shutdown
+```
+
+소유자 계정으로 종료 버튼을 누른다. Telegram을 사용할 수 없는 경우에만
+기존 호스트의 터미널에서 다음 명령을 실행한다.
+
 ```bash
 ./scripts/stop.sh
 pgrep -af '[d]ist/telegram-main.js'
@@ -73,12 +80,17 @@ codex login status
 ./scripts/start-telegram.sh
 ```
 
+첫 번째로 등록한 허용 사용자가 새 호스트의 소유자가 된다. 기존 호스트와
+새 호스트의 로컬 설정은 서로 복사하지 않으므로, 새 호스트에서도 같은
+사용자 ID를 먼저 등록한다.
+
 휴대폰에서 확인한다.
 
 ```text
 /health
 /whoami
 /features
+/shutdown을 열고 취소 버튼 확인
 /newsession 전환 테스트
 k-skill에는 어떤 기능들이 있어?
 /sessions

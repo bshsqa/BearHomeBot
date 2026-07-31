@@ -23,13 +23,19 @@ if [[ -n "$TELEGRAM_USER_IDS" && ! "$TELEGRAM_USER_IDS" =~ ^[0-9]+(,[0-9]+)*$ ]]
   exit 1
 fi
 
+TELEGRAM_OWNER_ID="${TELEGRAM_USER_IDS%%,*}"
+
 umask 077
 mkdir -p "$CONFIG_DIR"
 {
   printf 'BEARHOMEBOT_TELEGRAM_TOKEN=%s\n' "$TELEGRAM_TOKEN"
   printf 'BEARHOMEBOT_TELEGRAM_ALLOWED_USER_IDS=%s\n' "$TELEGRAM_USER_IDS"
+  printf 'BEARHOMEBOT_TELEGRAM_OWNER_USER_ID=%s\n' "$TELEGRAM_OWNER_ID"
 } >"$CONFIG_FILE"
 chmod 0600 "$CONFIG_FILE"
 
 printf 'Telegram bootstrap configuration saved to %s with mode 0600.\n' \
   "$CONFIG_FILE"
+if [[ -n "$TELEGRAM_OWNER_ID" ]]; then
+  printf 'Telegram user %s is the BearHomeBot owner.\n' "$TELEGRAM_OWNER_ID"
+fi

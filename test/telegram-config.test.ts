@@ -21,14 +21,46 @@ test("loads Telegram configuration without exposing the token", () => {
   const config = loadTelegramConfig({
     BEARHOMEBOT_TELEGRAM_TOKEN: "123456:abcdefghijklmnopqrstuv",
     BEARHOMEBOT_TELEGRAM_ALLOWED_USER_IDS: "1001,1002",
+    BEARHOMEBOT_TELEGRAM_OWNER_USER_ID: "1001",
     BEARHOMEBOT_TELEGRAM_POLL_TIMEOUT_SECONDS: "30",
     BEARHOMEBOT_CODEX_TIMEOUT_SECONDS: "120",
   });
 
   assert.equal(config.token, "123456:abcdefghijklmnopqrstuv");
   assert.deepEqual([...config.allowedUserIds], ["1001", "1002"]);
+  assert.equal(config.ownerUserId, "1001");
   assert.equal(config.pollTimeoutSeconds, 30);
   assert.equal(config.codexTimeoutMilliseconds, 120_000);
+});
+
+test("uses the sole allowed Telegram user as a backward-compatible owner", () => {
+  const config = loadTelegramConfig({
+    BEARHOMEBOT_TELEGRAM_TOKEN: "123456:abcdefghijklmnopqrstuv",
+    BEARHOMEBOT_TELEGRAM_ALLOWED_USER_IDS: "1001",
+  });
+
+  assert.equal(config.ownerUserId, "1001");
+});
+
+test("requires an explicitly configured owner when multiple users exist", () => {
+  const config = loadTelegramConfig({
+    BEARHOMEBOT_TELEGRAM_TOKEN: "123456:abcdefghijklmnopqrstuv",
+    BEARHOMEBOT_TELEGRAM_ALLOWED_USER_IDS: "1001,1002",
+  });
+
+  assert.equal(config.ownerUserId, undefined);
+});
+
+test("rejects an owner outside the Telegram allowlist", () => {
+  assert.throws(
+    () =>
+      loadTelegramConfig({
+        BEARHOMEBOT_TELEGRAM_TOKEN: "123456:abcdefghijklmnopqrstuv",
+        BEARHOMEBOT_TELEGRAM_ALLOWED_USER_IDS: "1001",
+        BEARHOMEBOT_TELEGRAM_OWNER_USER_ID: "1002",
+      }),
+    /must also be in the allowlist/,
+  );
 });
 
 test("defaults Codex turns to a 30 minute timeout", () => {

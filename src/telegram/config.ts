@@ -1,6 +1,7 @@
 export interface TelegramConfig {
   token: string;
   allowedUserIds: ReadonlySet<string>;
+  ownerUserId: string | undefined;
   pollTimeoutSeconds: number;
   codexTimeoutMilliseconds: number;
 }
@@ -62,11 +63,31 @@ export function loadTelegramConfig(
     );
   }
 
+  const allowedUserIds = parseAllowedUserIds(
+    env.BEARHOMEBOT_TELEGRAM_ALLOWED_USER_IDS,
+  );
+  const configuredOwnerUserId = env.BEARHOMEBOT_TELEGRAM_OWNER_USER_ID?.trim();
+  let ownerUserId: string | undefined;
+  if (configuredOwnerUserId) {
+    if (!USER_ID_PATTERN.test(configuredOwnerUserId)) {
+      throw new Error(
+        "BEARHOMEBOT_TELEGRAM_OWNER_USER_ID must be a numeric ID",
+      );
+    }
+    if (!allowedUserIds.has(configuredOwnerUserId)) {
+      throw new Error(
+        "BEARHOMEBOT_TELEGRAM_OWNER_USER_ID must also be in the allowlist",
+      );
+    }
+    ownerUserId = configuredOwnerUserId;
+  } else if (allowedUserIds.size === 1) {
+    ownerUserId = allowedUserIds.values().next().value;
+  }
+
   return {
     token,
-    allowedUserIds: parseAllowedUserIds(
-      env.BEARHOMEBOT_TELEGRAM_ALLOWED_USER_IDS,
-    ),
+    allowedUserIds,
+    ownerUserId,
     pollTimeoutSeconds,
     codexTimeoutMilliseconds: codexTimeoutSeconds * 1_000,
   };

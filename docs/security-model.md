@@ -20,6 +20,8 @@ Codex는 다음 옵션으로 실행된다.
 
 - private Telegram chat만 처리한다.
 - 숫자 user ID가 allowlist에 있는 사용자만 Codex를 호출할 수 있다.
+- 소유자 user ID만 `/shutdown` 확인 버튼으로 gateway를 종료할 수 있다.
+- 종료 확인은 2분짜리 일회용 토큰이며 재사용할 수 없다.
 - 각 사용자는 자신의 Codex session만 선택하고 resume할 수 있다.
 - 같은 Telegram update는 SQLite checkpoint로 한 번만 처리한다.
 - Telegram bot token은 Codex child environment에서 제거한다.
@@ -44,6 +46,7 @@ Codex 프로젝트 지침은 credential 값을 답변이나 로그에 출력하�
 ## 운영 전제
 
 - allowlist에는 이 PC의 셸 접근을 맡겨도 되는 사용자만 등록한다.
+- 첫 번째 허용 사용자를 소유자로 기록하고 가족 사용자 추가 시 보존한다.
 - Telegram 계정과 bot token을 안전하게 관리한다.
 - 가족 사이에도 파일과 credential을 분리해야 한다면 이 구조를 사용하지
   않고 OS 계정 또는 별도 worker 격리를 먼저 설계한다.

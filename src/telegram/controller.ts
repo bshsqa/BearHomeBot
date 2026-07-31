@@ -1,3 +1,5 @@
+import { randomBytes } from "node:crypto";
+
 import type { CodexRunRequest, CodexRunResult } from "../codex/runner.js";
 import { CodexRunnerError } from "../codex/runner.js";
 import { TaskCoordinator } from "../concurrency/task-coordinator.js";
@@ -25,6 +27,7 @@ import type {
 
 const TELEGRAM_MESSAGE_LIMIT = 3_900;
 const SESSION_PAGE_SIZE = 8;
+const SHUTDOWN_CONFIRMATION_TTL_MILLISECONDS = 2 * 60 * 1_000;
 
 export const BEARHOMEBOT_COMMANDS: TelegramBotCommand[] = [
   { command: "newsession", description: "새 Codex 대화 만들기" },
@@ -35,6 +38,7 @@ export const BEARHOMEBOT_COMMANDS: TelegramBotCommand[] = [
   { command: "features", description: "사용 가능한 기능 둘러보기" },
   { command: "health", description: "BearHomeBot 연결 상태" },
   { command: "whoami", description: "내 Telegram 사용자 ID" },
+  { command: "shutdown", description: "현재 봇 호스트 종료 (소유자)" },
 ];
 
 export interface CodexRunnerLike {
@@ -52,6 +56,15 @@ export interface TelegramControllerOptions {
   runner: CodexRunnerLike;
   coordinator?: TaskCoordinator;
   now?: () => Date;
+  ownerUserId?: string | undefined;
+  requestShutdown: () => void;
+}
+
+interface PendingShutdown {
+  chatId: number;
+  expiresAt: number;
+  token: string;
+  userId: string;
 }
 
 function defaultSessionName(now: Date): string {
@@ -108,6 +121,9 @@ export class TelegramController {
   readonly #runner: CodexRunnerLike;
   readonly #coordinator: TaskCoordinator;
   readonly #now: () => Date;
+  readonly #ownerUserId: string | undefined;
+  readonly #requestShutdown: () => void;
+  #pendingShutdown: PendingShutdown | undefined;
 
   constructor(options: TelegramControllerOptions) {
     this.#client = options.client;
@@ -115,6 +131,8 @@ export class TelegramController {
     this.#runner = options.runner;
     this.#coordinator = options.coordinator ?? new TaskCoordinator(2);
     this.#now = options.now ?? (() => new Date());
+    this.#ownerUserId = options.ownerUserId;
+    this.#requestShutdown = options.requestShutdown;
   }
 
   getInitialOffset(): number | undefined {
@@ -131,7 +149,11 @@ export class TelegramController {
       return;
     }
 
-    const action = routeTelegramUpdate(update, allowedUserIds);
+    const action = routeTelegramUpdate(
+      update,
+      allowedUserIds,
+      this.#ownerUserId,
+    );
     if (!action) {
       this.#store.completeTelegramUpdate(update.update_id, "ignored");
       return;
@@ -244,6 +266,83 @@ export class TelegramController {
         );
         return;
       }
+      case "request_shutdown": {
+        const token = randomBytes(12).toString("hex");
+        this.#pendingShutdown = {
+          chatId: action.chatId,
+          expiresAt:
+            this.#now().getTime() + SHUTDOWN_CONFIRMATION_TTL_MILLISECONDS,
+          token,
+          userId: action.userId,
+        };
+        await this.#client.sendMessage(
+          action.chatId,
+          "이 PC의 BearHomeBot을 종료할까?\n종료하면 다른 PC에서 다시 시작하기 전까지 봇이 응답하지 않아.",
+          {
+            signal: serviceSignal,
+            replyMarkup: {
+              inline_keyboard: [
+                [
+                  {
+                    text: "종료",
+                    callback_data: `shutdown:confirm:${token}`,
+                  },
+                  {
+                    text: "취소",
+                    callback_data: `shutdown:cancel:${token}`,
+                  },
+                ],
+              ],
+            },
+          },
+        );
+        return;
+      }
+      case "cancel_shutdown": {
+        if (!this.#matchesPendingShutdown(action)) {
+          await this.#client.answerCallbackQuery(
+            action.callbackQueryId,
+            "종료 확인이 만료됐어. /shutdown부터 다시 실행해줘.",
+            serviceSignal,
+          );
+          return;
+        }
+        this.#pendingShutdown = undefined;
+        await this.#client.answerCallbackQuery(
+          action.callbackQueryId,
+          "종료를 취소했어.",
+          serviceSignal,
+        );
+        await this.#send(
+          action.chatId,
+          "BearHomeBot 종료를 취소했어.",
+          serviceSignal,
+        );
+        return;
+      }
+      case "confirm_shutdown": {
+        if (!this.#matchesPendingShutdown(action)) {
+          await this.#client.answerCallbackQuery(
+            action.callbackQueryId,
+            "종료 확인이 만료됐어. /shutdown부터 다시 실행해줘.",
+            serviceSignal,
+          );
+          return;
+        }
+        this.#pendingShutdown = undefined;
+        await this.#client.answerCallbackQuery(
+          action.callbackQueryId,
+          "BearHomeBot을 종료할게.",
+          serviceSignal,
+        );
+        await this.#send(
+          action.chatId,
+          "이 PC의 BearHomeBot을 종료하고 있어. 이제 다른 PC에서 시작해도 돼.",
+          serviceSignal,
+        );
+        this.#requestShutdown();
+        return;
+      }
       case "prompt": {
         const sessionId = (
           this.#store.getActiveSession(action.userId) ??
@@ -266,6 +365,22 @@ export class TelegramController {
         return;
       }
     }
+  }
+
+  #matchesPendingShutdown(
+    action: Extract<
+      TelegramAction,
+      { kind: "cancel_shutdown" | "confirm_shutdown" }
+    >,
+  ): boolean {
+    const pending = this.#pendingShutdown;
+    return Boolean(
+      pending &&
+      pending.token === action.token &&
+      pending.userId === action.userId &&
+      pending.chatId === action.chatId &&
+      pending.expiresAt >= this.#now().getTime(),
+    );
   }
 
   async #sendSessionList(

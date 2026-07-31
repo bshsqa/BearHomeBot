@@ -120,11 +120,14 @@ function fixture(userIds = ["1001"]): {
   controller: TelegramController;
   service: AbortController;
   allowed: Set<string>;
+  shutdown: { requests: number };
 } {
   const store = new StateStore(":memory:", () => "2026-07-30T10:00:00.000Z");
   store.importBootstrapUsers(userIds);
   const client = new FakeTelegramClient();
   const runner = new FakeCodexRunner();
+  const service = new AbortController();
+  const shutdown = { requests: 0 };
   return {
     store,
     client,
@@ -134,9 +137,15 @@ function fixture(userIds = ["1001"]): {
       store,
       runner,
       now: () => new Date("2026-07-30T10:00:00.000Z"),
+      ownerUserId: userIds[0],
+      requestShutdown: () => {
+        shutdown.requests += 1;
+        service.abort();
+      },
     }),
-    service: new AbortController(),
+    service,
     allowed: new Set(userIds),
+    shutdown,
   };
 }
 
@@ -242,6 +251,77 @@ test("shows feature categories and category details without invoking Codex", asy
   }
 });
 
+test("requires owner confirmation before shutting down the gateway", async () => {
+  const context = fixture(["1001", "1002"]);
+  try {
+    await context.controller.handleUpdate(
+      message(1, "/shutdown"),
+      context.allowed,
+      context.service.signal,
+    );
+
+    const confirmation = context.client.messages.at(-1);
+    const confirmData =
+      confirmation?.replyMarkup?.inline_keyboard[0]?.[0]?.callback_data;
+    assert.match(confirmData ?? "", /^shutdown:confirm:[a-f0-9]{24}$/u);
+    assert.equal(context.shutdown.requests, 0);
+    assert.equal(context.service.signal.aborted, false);
+    assert.equal(context.runner.requests.length, 0);
+
+    await context.controller.handleUpdate(
+      callback(2, confirmData ?? ""),
+      context.allowed,
+      context.service.signal,
+    );
+
+    assert.equal(context.shutdown.requests, 1);
+    assert.equal(context.service.signal.aborted, true);
+    assert.match(
+      context.client.messages.at(-1)?.text ?? "",
+      /다른 PC에서 시작해도 돼/,
+    );
+  } finally {
+    context.store.close();
+  }
+});
+
+test("cancels shutdown without stopping and rejects a reused button", async () => {
+  const context = fixture();
+  try {
+    await context.controller.handleUpdate(
+      message(1, "/shutdown"),
+      context.allowed,
+      context.service.signal,
+    );
+    const cancelData =
+      context.client.messages.at(-1)?.replyMarkup?.inline_keyboard[0]?.[1]
+        ?.callback_data;
+
+    await context.controller.handleUpdate(
+      callback(2, cancelData ?? ""),
+      context.allowed,
+      context.service.signal,
+    );
+    await context.controller.handleUpdate(
+      callback(3, cancelData ?? ""),
+      context.allowed,
+      context.service.signal,
+    );
+
+    assert.equal(context.shutdown.requests, 0);
+    assert.equal(context.service.signal.aborted, false);
+    assert.deepEqual(context.client.callbacks.slice(-2), [
+      { id: "callback-2", text: "종료를 취소했어." },
+      {
+        id: "callback-3",
+        text: "종료 확인이 만료됐어. /shutdown부터 다시 실행해줘.",
+      },
+    ]);
+  } finally {
+    context.store.close();
+  }
+});
+
 test("lists multiple sessions and switches through an owned callback", async () => {
   const context = fixture();
   try {
@@ -334,6 +414,7 @@ test("resumes the persisted thread after a service restart", async () => {
       client: new FakeTelegramClient(),
       store: firstStore,
       runner: firstRunner,
+      requestShutdown: () => undefined,
     });
     await firstController.handleUpdate(
       message(1, "기억할 내용"),
@@ -351,6 +432,7 @@ test("resumes the persisted thread after a service restart", async () => {
       client: new FakeTelegramClient(),
       store: reopenedStore,
       runner: resumedRunner,
+      requestShutdown: () => undefined,
     });
     await resumedController.handleUpdate(
       message(2, "기억한 내용"),
@@ -394,6 +476,7 @@ test("keeps queued prompts bound to the session active when received", async () 
         };
       },
     },
+    requestShutdown: () => undefined,
   });
   const allowed = new Set(["1001"]);
   const service = new AbortController();
@@ -497,6 +580,7 @@ test("cancels an active Codex turn without sending a failure reply", async () =>
           );
         }),
     },
+    requestShutdown: () => undefined,
   });
 
   try {
