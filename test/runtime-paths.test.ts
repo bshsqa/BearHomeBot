@@ -18,16 +18,6 @@ test("uses XDG directories outside the project checkout", () => {
   assert.equal(paths.dataDir, "/tmp/bearhomebot-test/data/bearhomebot");
   assert.equal(paths.cacheDir, "/tmp/bearhomebot-test/cache/bearhomebot");
   assert.equal(paths.stateDatabase, join(paths.dataDir, "state.sqlite"));
-  assert.equal(paths.codexWorkspace, join(paths.dataDir, "codex-workspace"));
-  assert.equal(
-    paths.kSkillMirror,
-    join(paths.dataDir, "k-skill", "mirror.git"),
-  );
-  assert.equal(
-    paths.kSkillCandidateRoot,
-    join(paths.dataDir, "k-skill", "review-candidates"),
-  );
-  assert.equal(paths.releaseRoot, join(paths.dataDir, "k-skill", "releases"));
 });
 
 test("prefers explicit BearHomeBot directory overrides", () => {

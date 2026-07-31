@@ -4,11 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
-import {
-  CodexRunner,
-  CodexRunnerError,
-  prepareCodexWorkspace,
-} from "../src/codex/runner.js";
+import { CodexRunner, CodexRunnerError } from "../src/codex/runner.js";
 
 const THREAD_ID = "0199a213-81c0-7800-8aa1-bbab2a035a53";
 
@@ -19,7 +15,6 @@ function fixture(scriptBody: string): {
   const root = mkdtempSync(join(tmpdir(), "bearhomebot-codex-runner-"));
   const workspace = join(root, "workspace");
   mkdirSync(workspace);
-  prepareCodexWorkspace(workspace);
   const script = join(root, "fake-codex.mjs");
   writeFileSync(script, scriptBody, { mode: 0o700 });
 
@@ -41,14 +36,13 @@ function fixture(scriptBody: string): {
   };
 }
 
-test("starts Codex with stdin and a secret-free environment", async () => {
+test("passes the raw prompt, preserves the host environment, and removes the bot token", async () => {
   const { root, runner } = fixture(`
     let prompt = "";
     for await (const chunk of process.stdin) prompt += chunk;
-    const leaked = Boolean(
-      process.env.BEARHOMEBOT_TELEGRAM_TOKEN ||
-      process.env.KSKILL_KTX_PASSWORD
-    );
+    const validEnvironment =
+      !process.env.BEARHOMEBOT_TELEGRAM_TOKEN &&
+      process.env.KSKILL_KTX_PASSWORD === "must-not-leak";
     process.stdout.write(JSON.stringify({
       type: "thread.started",
       thread_id: "${THREAD_ID}"
@@ -57,7 +51,7 @@ test("starts Codex with stdin and a secret-free environment", async () => {
       type: "item.completed",
       item: {
         type: "agent_message",
-        text: leaked ? "secret leaked" : "받음: " + prompt.trim()
+        text: validEnvironment ? "받음: " + prompt.trim() : "invalid environment"
       }
     }) + "\\n");
     process.stdout.write(JSON.stringify({
@@ -77,7 +71,7 @@ test("starts Codex with stdin and a secret-free environment", async () => {
   }
 });
 
-test("pins GPT-5.6 Sol with medium reasoning on the standard service tier", async () => {
+test("uses normal Codex configuration with unrestricted unattended execution", async () => {
   const { root, runner } = fixture(`
     process.stdout.write(JSON.stringify({
       type: "thread.started",
@@ -97,18 +91,12 @@ test("pins GPT-5.6 Sol with medium reasoning on the standard service tier", asyn
     const result = await runner.run({ prompt: "모델 확인" });
     const arguments_ = JSON.parse(result.finalText) as string[];
 
-    assert.deepEqual(
-      arguments_.slice(
-        arguments_.indexOf("--model"),
-        arguments_.indexOf("--model") + 2,
-      ),
-      ["--model", "gpt-5.6-sol"],
-    );
-    assert.ok(arguments_.includes('model_reasoning_effort="medium"'));
     assert.ok(
-      arguments_.every((argument) => !argument.includes("service_tier")),
+      arguments_.includes("--dangerously-bypass-approvals-and-sandbox"),
     );
-    assert.ok(arguments_.every((argument) => !argument.includes("fast_mode")));
+    assert.ok(!arguments_.includes("--ignore-user-config"));
+    assert.ok(!arguments_.includes("--strict-config"));
+    assert.ok(!arguments_.includes("--model"));
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

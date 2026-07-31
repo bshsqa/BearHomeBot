@@ -2,7 +2,7 @@
   "name": "bearhomebot",
   "version": "0.0.0",
   "private": true,
-  "description": "Ubuntu control plane for Telegram, Codex CLI, and reviewed k-skill releases",
+  "description": "Lightweight Telegram gateway for Codex CLI and k-skill",
   "type": "module",
   "engines": {
     "node": ">=24 <25"
@@ -15,9 +15,8 @@
     "format": "prettier --write \"src/**/*.ts\" \"test/**/*.ts\" package.json \"tsconfig*.json\"",
     "format:check": "prettier --check \"src/**/*.ts\" \"test/**/*.ts\" package.json \"tsconfig*.json\"",
     "lint": "tsc -p tsconfig.json --noEmit",
-    "start": "node dist/main.js",
     "start:telegram": "node dist/telegram-main.js",
-    "update:k-skill": "bash scripts/k-skill-updater.sh update",
+    "sync:k-skill": "bash scripts/sync-k-skill.sh",
     "test": "node --eval \"require('node:fs').rmSync('.runtime/test-dist', { recursive: true, force: true })\" && tsc -p tsconfig.test.json && node --test .runtime/test-dist/test/*.test.js"
   },
   "devDependencies": {

@@ -2,72 +2,26 @@
 
 ## 원칙
 
-BearHomeBot에서 Git으로 이동하는 것은 source code, test, version-controlled
-policy와 문서뿐이다. 다음 항목은 각 PC에서 새로 만든다.
+동일한 Telegram bot token은 한 번에 한 PC에서만 long polling한다. 새
+PC를 활성화하기 전에 기존 PC의 gateway를 먼저 종료한다.
 
-- Codex CLI 로그인과 local thread
-- Telegram bot token 설정
-- Telegram allowlist bootstrap 설정
-- BearHomeBot SQLite와 `/sessions`
-- `k-skill` mirror, 스킬 동작 검토 cache와 active release
-- 향후 추가할 사용자별 service credential
+Git으로 이동하는 항목:
 
-가족이 사용하는 동일 Telegram bot token의 gateway는 한 번에 한 PC에서만
-실행한다. 현재 구현에는 PC 사이의 distributed lock이나 leader election이
-없다. 개발 PC에서 실제 봇을 시험해야 하면 운영 gateway를 먼저 끄거나,
-별도의 개발용 Telegram bot을 사용한다.
+- BearHomeBot 소스와 문서
 
-Windows DPAPI로 보호한 vault keyring은 해당 Windows 사용자와 PC에
-묶이므로 다른 host로 복사하지 않는다. 새 host에서는 vault를 새로
-초기화하고 credential을 local hidden-input 명령으로 다시 등록한다.
-`vault.sqlite`, DPAPI keyring 또는 master key를 Git으로 전달하지 않는다.
+각 PC에서 따로 준비하는 항목:
 
-## 역할
+- Codex CLI 설치와 로그인
+- Telegram bot token과 allowlist
+- BearHomeBot SQLite와 Codex session
+- 프로젝트 내부의 `k-skill/` checkout
+- `~/.config/k-skill/secrets.env`
 
-### 개발 PC
+## 개발 PC에서 이어서 작업
 
-코드 작성, test, commit과 push를 담당한다. 실제 가족용 Telegram gateway는
-기본적으로 실행하지 않는다. 여러 개발 PC는 Git commit을 통해서만 작업을
-주고받는다.
-
-### 활성 Telegram 호스트
-
-가족용 bot token으로 long polling을 수행하는 유일한 PC다. 수동 개발
-단계에서는 foreground process로 실행하고, Phase 8 이후에는 운영 미니
-PC의 systemd service가 이 역할을 고정해서 맡는다.
-
-현재 `scripts/start-telegram.sh`는 다음 구성요소를 하나의 통합 Node
-process로 시작한다.
-
-```text
-Telegram long polling
-  -> allowlist와 update deduplication
-  -> SQLite user, session, turn 상태
-  -> per-user queue
-  -> codex exec 또는 resume child process
-  -> Telegram 답장
-```
-
-별도의 Codex server process나 `scripts/start.sh`를 함께 실행하지 않는다.
-Codex CLI는 미리 로그인만 해두며 Telegram message가 도착할 때 통합
-process가 필요한 child process를 시작한다.
-
-systemd service가 구현되기 전에는 `start-telegram.sh`를 실행한 terminal을
-열어 둬야 한다. terminal 종료, `Ctrl+C`, logout 또는 reboot 후에는
-gateway를 수동으로 다시 실행한다.
-
-### 운영 미니 PC
-
-검증된 Git commit을 새로 clone하고 local credential과 runtime을
-구성한다. 개발 PC의 database, Codex home, session 또는 login 파일을
-복사하지 않는다.
-
-## 개발 PC 전환
-
-완료된 작업을 다른 PC에서 이어갈 때 source PC에서 실행한다.
+기존 PC:
 
 ```bash
-cd BearHomeBot
 npm run ci
 git status
 git add <의도한 파일>
@@ -75,24 +29,13 @@ git commit -m "<변경 내용>"
 git push origin main
 ```
 
-작업이 아직 완료되지 않아 `main`에 넣을 수 없다면 local stash에만
-남기지 않는다. topic branch에 checkpoint commit을 만들고 push한다.
-
-```bash
-git switch -c work/<작업이름>
-git add <의도한 파일>
-git commit -m "WIP: <현재 상태>"
-git push -u origin work/<작업이름>
-```
-
-대상 개발 PC에서는 다음과 같이 시작한다.
+새 PC:
 
 ```bash
 git clone https://github.com/bshsqa/BearHomeBot.git
 cd BearHomeBot
 
-# 이미 clone되어 있다면
-git switch main
+# 이미 clone했다면
 git pull --ff-only origin main
 
 ./scripts/doctor.sh
@@ -101,177 +44,69 @@ codex login
 codex login status
 ```
 
-topic branch를 이어갈 때는 clone 후 해당 branch를 checkout한다.
+`install.sh`가 `k-skill/`을 준비한다. 필요하면 별도로 갱신한다.
 
 ```bash
-git fetch origin
-git switch --track origin/work/<작업이름>
+./scripts/sync-k-skill.sh
 ```
-
-새 Codex thread에는 다음 시작 요청을 사용한다.
-
-```text
-BearHomeBot 저장소의 AGENTS.md와 거기서 지정한 문서, 최근 Git 이력을
-읽어줘. 현재 checkout된 commit과 테스트 상태를 확인하고,
-docs/implementation-plan.md의 바로 다음 작업부터 이어서 진행해줘.
-```
-
-Codex가 `AGENTS.md`를 자동으로 읽더라도 현재 branch, 최신 commit,
-test 결과를 확인하도록 위 요청을 명시하는 것이 좋다.
 
 ## Telegram 호스트 전환
 
-### 1. Source code 확정
-
-source 개발 PC에서 변경을 검증하고 push한다. 대상 PC에서 사용할 commit
-SHA를 기록한다.
-
-```bash
-npm run ci
-git status
-git rev-parse HEAD
-git push origin main
-```
-
-dirty worktree나 push되지 않은 commit으로 운영 host를 전환하지 않는다.
-
-### 2. 기존 gateway 종료
-
-기존 gateway가 foreground terminal에서 실행 중이면 `Ctrl+C`로 종료한다.
-systemd service가 설치된 이후에는 다음 명령을 사용한다.
+기존 호스트에서:
 
 ```bash
 ./scripts/stop.sh
-```
-
-프로세스가 남아 있지 않은지 확인한다. 아무 출력도 없어야 한다.
-
-```bash
 pgrep -af '[d]ist/telegram-main.js'
 ```
 
-기존 gateway 종료를 확인하기 전에는 대상 PC에서 같은 bot token으로
-gateway를 시작하지 않는다.
+두 번째 명령에 출력이 없어야 한다.
 
-### 3. 대상 PC fresh setup
-
-대상 PC에서 repository와 필수 runtime을 준비한다.
+새 호스트에서:
 
 ```bash
-git clone https://github.com/bshsqa/BearHomeBot.git
-cd BearHomeBot
-
-# 이미 clone되어 있다면
-git switch main
 git pull --ff-only origin main
-
-./scripts/doctor.sh
 ./scripts/install.sh
-
-codex login
 codex login status
 
 ./scripts/configure-telegram.sh
-./scripts/allow-telegram-user.sh <Telegram 숫자 user ID>
-```
-
-가족이 여러 명이면 각 숫자 user ID를 같은 명령으로 추가한다. token과
-user ID 설정은 Git에 넣지 않는다.
-
-환경 검증 후 현재 `k-skill` 후보의 로딩 안전 조건을 실행 없이 검사할 수
-있다.
-
-```bash
-./scripts/k-skill-updater.sh check
-```
-
-### 4. 새 gateway 활성화
-
-기존 PC가 완전히 정지한 후 대상 PC에서 실행한다.
-
-```bash
+./scripts/allow-telegram-user.sh <Telegram 숫자 ID>
 ./scripts/start-telegram.sh
 ```
 
-수동 단계에서는 이 terminal을 열어 둔다. 휴대폰에서 순서대로 확인한다.
+휴대폰에서 확인한다.
 
 ```text
 /health
 /whoami
-안녕 BearHomeBot
+/features
+/newsession 전환 테스트
+k-skill에는 어떤 기능들이 있어?
 /sessions
 ```
 
-fresh setup이므로 기존 PC의 `/sessions`와 Codex 문맥은 나타나지 않는다.
-첫 일반 메시지 또는 `/newsession`으로 새 local Codex thread를 만든다.
+`/health`의 호스트 이름이 새 PC인지 확인한다.
 
-### 5. 전환 실패 시 rollback
+## 같은 PC 재시작
 
-대상 PC의 gateway를 먼저 종료하고 프로세스가 없는지 확인한 다음, 이전
-PC의 gateway를 다시 시작한다. 두 PC를 동시에 켜서 장애를 우회하지
-않는다.
-
-이전 PC의 local database와 Codex thread를 삭제하지 않았다면 그 PC의
-기존 session은 그대로 남아 있다. 대상 PC에서 새로 만든 session과는
-서로 독립적이다.
-
-## 같은 PC 종료와 재시작
-
-PC를 바꾸지 않고 같은 host를 껐다 켤 때는 fresh setup을 반복하지 않는다.
-다음 local 상태가 디스크에 그대로 남아 있기 때문이다.
-
-```text
-~/.config/bearhomebot/telegram.env
-~/.local/share/bearhomebot/state.sqlite
-~/.local/share/bearhomebot/codex-workspace/
-~/.local/share/bearhomebot/k-skill/
-~/.cache/bearhomebot/k-skill/
-~/.codex/
-```
-
-재부팅 후 Codex login이 유지되는지 확인하고 통합 process만 다시 실행한다.
+같은 PC에서는 설정을 다시 만들지 않는다.
 
 ```bash
 cd BearHomeBot
+git pull --ff-only origin main
+./scripts/sync-k-skill.sh
+npm run build
 codex login status
 ./scripts/start-telegram.sh
 ```
 
-정상적으로 재시작하면 기존 allowlist, `/sessions`, active session, Codex
-thread ID, Telegram update checkpoint를 SQLite에서 읽는다. Codex의 local
-thread 파일도 같은 PC에 있으므로 다음 메시지는 기존 thread를 resume한다.
+기존 Telegram allowlist, SQLite session과 로컬 Codex thread가 남아 있어
+다음 메시지에서 기존 대화를 resume할 수 있다.
 
-단, 종료 시점에 메모리에서 실행 중이던 queue나 Codex turn은 자동으로
-이어 실행하지 않는다. 처리 중이던 Telegram update는 중복 작업을 피하기
-위해 자동 재시도되지 않을 수 있다. 종료 전에 가능하면 진행 중인 답변이
-끝날 때까지 기다리고 foreground terminal에서 `Ctrl+C`로 gateway를
-정상 종료한다.
+## 데이터 이전
 
-재시작 후 휴대폰에서 다음을 확인한다.
+기본 절차는 session과 credential을 PC 사이에서 복사하지 않는다. 새
+PC에서는 새 Codex login과 새 session을 만들고, 필요한 서비스 credential은
+`~/.config/k-skill/secrets.env`에 다시 설정한다.
 
-```text
-/health
-/sessions
-```
-
-Codex authentication이 만료된 경우에만 `codex login`을 다시 수행한다.
-Phase 7에서 interrupted job recovery를, Phase 8에서 reboot 후 systemd
-자동 시작을 구현한다.
-
-## 권장 이동 순서
-
-프로젝트가 운영 미니 PC에 정착하기 전까지는 다음 흐름을 사용한다.
-
-```text
-현재 개발 PC
-  -> commit과 push
-집 메인 개발 PC
-  -> pull, fresh Codex login/thread, 개발과 검증
-  -> commit과 push
-운영 미니 PC
-  -> pull, fresh local setup
-  -> 유일한 가족용 Telegram gateway 실행
-```
-
-운영 미니 PC가 활성화된 뒤에는 개발 PC에서 가족용 gateway를 실행하지
-않는다. Telegram 왕복 test가 필요하면 별도 개발 bot token을 사용한다.
+소스 작업은 Git commit으로만 넘긴다. `.runtime`, `k-skill/`, SQLite,
+Telegram token, secrets 파일 또는 `~/.codex`를 Git에 추가하지 않는다.

@@ -3,12 +3,19 @@ set -euo pipefail
 umask 077
 
 PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# shellcheck source=scripts/node-env.sh
+source "$PROJECT_ROOT/scripts/node-env.sh"
 ENTRYPOINT="$PROJECT_ROOT/dist/telegram-main.js"
 CONFIG_HOME="${XDG_CONFIG_HOME:-${HOME}/.config}"
 CONFIG_FILE="$CONFIG_HOME/bearhomebot/telegram.env"
 
 if [[ ! -f "$ENTRYPOINT" ]]; then
   printf 'BearHomeBot is not built. Run npm run build first.\n' >&2
+  exit 1
+fi
+
+if [[ ! -f "$PROJECT_ROOT/k-skill/README.md" ]]; then
+  printf 'Missing k-skill checkout. Run ./scripts/sync-k-skill.sh first.\n' >&2
   exit 1
 fi
 

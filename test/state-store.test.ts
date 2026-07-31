@@ -152,165 +152,37 @@ test("records turn metadata without requiring prompt or response text", () => {
   }
 });
 
-test("promotes validated k-skill releases and rolls back atomically", () => {
-  const store = createStore();
-  const firstSha = "a".repeat(40);
-  const secondSha = "b".repeat(40);
-  try {
-    store.recordKSkillCandidate({
-      sha: firstSha,
-      treeSha: "1".repeat(40),
-      sourceUrl: "https://github.com/NomaDamas/k-skill.git",
-      sourceBranch: "main",
-      manifest: { candidate: 1 },
-    });
-    store.markKSkillCandidateValidated({
-      sha: firstSha,
-      releasePath: `/releases/${firstSha}`,
-      review: { status: "approved" },
-    });
-    store.promoteKSkillRelease(firstSha);
-
-    store.recordKSkillCandidate({
-      sha: secondSha,
-      treeSha: "2".repeat(40),
-      sourceUrl: "https://github.com/NomaDamas/k-skill.git",
-      sourceBranch: "main",
-      manifest: { candidate: 2 },
-    });
-    store.markKSkillCandidateValidated({
-      sha: secondSha,
-      releasePath: `/releases/${secondSha}`,
-      review: { status: "approved" },
-    });
-    store.promoteKSkillRelease(secondSha);
-
-    assert.deepEqual(store.getKSkillActiveState(), {
-      activeSha: secondSha,
-      previousSha: firstSha,
-      updatedAt: NOW,
-    });
-    assert.equal(store.getKSkillRelease(firstSha)?.status, "superseded");
-
-    const rolledBack = store.rollbackKSkillRelease();
-    assert.equal(rolledBack.sha, firstSha);
-    assert.equal(rolledBack.status, "active");
-    assert.deepEqual(store.getKSkillActiveState(), {
-      activeSha: firstSha,
-      previousSha: secondSha,
-      updatedAt: NOW,
-    });
-  } finally {
-    store.close();
-  }
-});
-
-test("refreshes review metadata for the active SHA atomically", () => {
-  const store = createStore();
-  const sha = "a".repeat(40);
-  try {
-    store.recordKSkillCandidate({
-      sha,
-      treeSha: "1".repeat(40),
-      sourceUrl: "https://github.com/NomaDamas/k-skill.git",
-      sourceBranch: "main",
-      manifest: { scopeVersion: 1 },
-    });
-    store.markKSkillCandidateValidated({
-      sha,
-      releasePath: `/releases/${sha}-p1-s1`,
-      review: { enabledSkills: ["old"] },
-    });
-    store.promoteKSkillRelease(sha);
-
-    const refreshed = store.refreshActiveKSkillRelease({
-      sha,
-      releasePath: `/releases/${sha}-p1-s2`,
-      manifest: { scopeVersion: 2 },
-      review: { enabledSkills: ["new"] },
-    });
-
-    assert.equal(refreshed.status, "active");
-    assert.equal(refreshed.releasePath, `/releases/${sha}-p1-s2`);
-    assert.deepEqual(refreshed.manifest, { scopeVersion: 2 });
-    assert.deepEqual(refreshed.review, { enabledSkills: ["new"] });
-    assert.equal(store.getKSkillActiveState().activeSha, sha);
-  } finally {
-    store.close();
-  }
-});
-
-test("records rejected k-skill candidates without release content", () => {
-  const store = createStore();
-  const sha = "c".repeat(40);
-  try {
-    store.recordKSkillCandidate({
-      sha,
-      treeSha: "3".repeat(40),
-      sourceUrl: "https://github.com/NomaDamas/k-skill.git",
-      sourceBranch: "main",
-      manifest: { deterministic: true },
-    });
-    const rejected = store.rejectKSkillCandidate(
-      sha,
-      "deterministic_gate_failed",
-    );
-
-    assert.equal(rejected.status, "rejected");
-    assert.equal(rejected.failureCode, "deterministic_gate_failed");
-    assert.equal(rejected.releasePath, undefined);
-  } finally {
-    store.close();
-  }
-});
-
-test("caches behavior reviews by skill digest and policy version", () => {
-  const store = createStore();
-  const sha = "d".repeat(40);
-  const digest = "e".repeat(64);
-  try {
-    store.recordKSkillCandidate({
-      sha,
-      treeSha: "4".repeat(40),
-      sourceUrl: "https://github.com/NomaDamas/k-skill.git",
-      sourceBranch: "main",
-      manifest: { behavior: true },
-    });
-    store.recordKSkillBehaviorReview({
-      skillId: "ktx-booking",
-      contentDigest: digest,
-      policyVersion: 1,
-      sourceSha: sha,
-      review: { status: "approved" },
-    });
-
-    assert.deepEqual(
-      store.getKSkillBehaviorReview("ktx-booking", digest, 1)?.review,
-      { status: "approved" },
-    );
-    assert.equal(
-      store.getKSkillBehaviorReview("ktx-booking", digest, 2),
-      undefined,
-    );
-  } finally {
-    store.close();
-  }
-});
-
-test("migrates an existing schema version 1 database to updater state", () => {
-  const root = mkdtempSync(join(tmpdir(), "bearhomebot-state-v1-"));
+test("removes legacy k-skill state without losing Telegram users", () => {
+  const root = mkdtempSync(join(tmpdir(), "bearhomebot-state-v3-"));
   const path = join(root, "state.sqlite");
+  const initial = new StateStore(path, () => NOW);
+  initial.importBootstrapUsers(["1001"]);
+  initial.close();
+
   const database = new DatabaseSync(path);
-  database.exec("PRAGMA user_version = 1");
+  database.exec(`
+    CREATE TABLE k_skill_releases (sha TEXT PRIMARY KEY);
+    CREATE TABLE k_skill_state (id INTEGER PRIMARY KEY);
+    CREATE TABLE k_skill_behavior_reviews (skill_id TEXT PRIMARY KEY);
+    PRAGMA user_version = 3;
+  `);
   database.close();
 
   try {
     const store = new StateStore(path, () => NOW);
     try {
-      assert.deepEqual(store.getKSkillActiveState(), {});
+      assert.equal(store.findEnabledUser("1001")?.telegramUserId, "1001");
     } finally {
       store.close();
     }
+    const migrated = new DatabaseSync(path, { readOnly: true });
+    const legacyTables = migrated
+      .prepare(
+        "SELECT name FROM sqlite_master WHERE type = 'table' AND name LIKE 'k_skill_%'",
+      )
+      .all();
+    migrated.close();
+    assert.deepEqual(legacyTables, []);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

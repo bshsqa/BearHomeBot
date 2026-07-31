@@ -2,13 +2,15 @@
 set -euo pipefail
 
 PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# shellcheck source=scripts/node-env.sh
+source "$PROJECT_ROOT/scripts/node-env.sh"
 
 "$PROJECT_ROOT/scripts/doctor.sh"
+"$PROJECT_ROOT/scripts/sync-k-skill.sh"
 
 cd "$PROJECT_ROOT"
 npm ci
 npm run ci
 
 printf 'BearHomeBot bootstrap installed successfully.\n'
-printf 'Run %s/scripts/start.sh --health to verify the app.\n' "$PROJECT_ROOT"
-printf 'Run %s/scripts/k-skill-updater.sh check to inspect the current candidate.\n' "$PROJECT_ROOT"
+printf 'Run %s/scripts/start-telegram.sh to start the Telegram gateway.\n' "$PROJECT_ROOT"

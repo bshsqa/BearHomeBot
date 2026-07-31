@@ -61,13 +61,9 @@ class FakeCodexRunner implements CodexRunnerLike {
 
   async run(request: CodexRunRequest): Promise<CodexRunResult> {
     this.requests.push(request);
-    const userMessage =
-      request.prompt.match(
-        /<user_message>\n(?<message>[\s\S]*)\n<\/user_message>$/u,
-      )?.groups?.message ?? request.prompt;
     return {
       threadId: request.threadId ?? THREAD_ONE,
-      finalText: `Codex 답변: ${userMessage}`,
+      finalText: `Codex 답변: ${request.prompt}`,
       usage: { inputTokens: 10, outputTokens: 5 },
     };
   }
@@ -161,10 +157,7 @@ test("creates a Codex thread and resumes it for the next message", async () => {
     assert.equal(context.runner.requests.length, 2);
     assert.equal(context.runner.requests[0]?.threadId, undefined);
     assert.equal(context.runner.requests[1]?.threadId, THREAD_ONE);
-    assert.match(
-      context.runner.requests[0]?.prompt ?? "",
-      /<user_message>\n내 이름은 곰이야\n<\/user_message>/u,
-    );
+    assert.equal(context.runner.requests[0]?.prompt, "내 이름은 곰이야");
     assert.equal(context.store.getActiveSession("1001")?.threadId, THREAD_ONE);
     assert.equal(context.store.getActiveSession("1001")?.turnCount, 2);
     assert.deepEqual(
@@ -181,84 +174,68 @@ test("creates a Codex thread and resumes it for the next message", async () => {
   }
 });
 
-test("answers capability catalog questions without invoking Codex", async () => {
+test("passes natural-language k-skill requests to Codex unchanged", async () => {
   const context = fixture();
-  context.controller = new TelegramController({
-    client: context.client,
-    store: context.store,
-    runner: context.runner,
-    catalog: {
-      listEnabled: () => [
-        {
-          skillId: "delivery-tracking",
-          category: "logistics",
-          description: "공식 택배 배송 상태를 조회한다.",
-        },
-        {
-          skillId: "ktx-booking",
-          category: "travel",
-          description: "KTX 열차와 예약 정보를 조회한다.",
-        },
-      ],
-    },
-  });
   try {
+    const userText =
+      "k skill에 있는 ktx 예약 스킬을 참고해서 ktx 조회와 예약이 가능해?";
     await context.controller.handleUpdate(
-      message(1, "/skills"),
-      context.allowed,
-      context.service.signal,
-    );
-
-    assert.equal(context.runner.requests.length, 0);
-    assert.equal(context.store.getActiveSession("1001"), undefined);
-    assert.equal(context.client.messages.length, 1);
-    assert.match(context.client.messages[0]?.text ?? "", /2개/u);
-    assert.match(context.client.messages[0]?.text ?? "", /delivery-tracking/u);
-    assert.match(context.client.messages[0]?.text ?? "", /ktx-booking/u);
-  } finally {
-    context.store.close();
-  }
-});
-
-test("gives Codex the active catalog as reference for a natural-language skill question", async () => {
-  const context = fixture();
-  context.controller = new TelegramController({
-    client: context.client,
-    store: context.store,
-    runner: context.runner,
-    catalog: {
-      listEnabled: () => [
-        {
-          skillId: "delivery-tracking",
-          category: "logistics",
-          description: "공식 택배 배송 상태를 조회한다.",
-        },
-        {
-          skillId: "ktx-booking",
-          category: "travel",
-          description: "KTX 열차와 예약 정보를 조회한다.",
-        },
-      ],
-    },
-  });
-  try {
-    await context.controller.handleUpdate(
-      message(
-        1,
-        "k skill에 있는 ktx 예약 스킬을 참고해서 ktx 조회와 예약이 가능해?",
-      ),
+      message(1, userText),
       context.allowed,
       context.service.signal,
     );
 
     assert.equal(context.runner.requests.length, 1);
-    const prompt = context.runner.requests[0]?.prompt ?? "";
-    assert.match(prompt, /<active_kskill_catalog>/u);
-    assert.match(prompt, /ktx-booking/u);
-    assert.match(prompt, /delivery-tracking/u);
-    assert.match(
-      context.client.messages.at(-1)?.text ?? "",
-      /ktx 조회와 예약이 가능해/u,
+    assert.equal(context.runner.requests[0]?.prompt, userText);
+    assert.equal(
+      context.client.messages.at(-1)?.text,
+      `Codex 답변: ${userText}`,
+    );
+  } finally {
+    context.store.close();
+  }
+});
+
+test("shows feature categories and category details without invoking Codex", async () => {
+  const context = fixture();
+  try {
+    await context.controller.handleUpdate(
+      message(1, "/features"),
+      context.allowed,
+      context.service.signal,
+    );
+
+    const menu = context.client.messages.at(-1);
+    assert.equal(context.runner.requests.length, 0);
+    assert.equal(menu?.replyMarkup?.inline_keyboard.length, 6);
+    assert.equal(
+      menu?.replyMarkup?.inline_keyboard[0]?.[0]?.callback_data,
+      "features:recommended",
+    );
+
+    await context.controller.handleUpdate(
+      callback(2, "features:recommended"),
+      context.allowed,
+      context.service.signal,
+    );
+
+    const details = context.client.messages.at(-1);
+    assert.match(details?.text ?? "", /^너한테 바로 쓸만한 것/u);
+    assert.match(details?.text ?? "", /ktx-booking/u);
+    assert.match(details?.text ?? "", /catchtable-sniper/u);
+    assert.equal(
+      details?.replyMarkup?.inline_keyboard[0]?.[0]?.callback_data,
+      "features:menu",
+    );
+
+    await context.controller.handleUpdate(
+      callback(3, "features:menu"),
+      context.allowed,
+      context.service.signal,
+    );
+    assert.equal(
+      context.client.messages.at(-1)?.replyMarkup?.inline_keyboard.length,
+      6,
     );
   } finally {
     context.store.close();
@@ -491,10 +468,7 @@ test("deduplicates replayed Telegram updates", async () => {
     );
 
     assert.equal(context.runner.requests.length, 1);
-    assert.match(
-      context.runner.requests[0]?.prompt ?? "",
-      /<user_message>\n한 번\n<\/user_message>/u,
-    );
+    assert.equal(context.runner.requests[0]?.prompt, "한 번");
   } finally {
     context.store.close();
   }

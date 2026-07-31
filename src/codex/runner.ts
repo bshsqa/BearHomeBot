@@ -1,24 +1,12 @@
-import {
-  accessSync,
-  constants,
-  existsSync,
-  mkdirSync,
-  realpathSync,
-} from "node:fs";
+import { accessSync, constants, realpathSync } from "node:fs";
 import { delimiter, isAbsolute, join } from "node:path";
-import {
-  spawn,
-  spawnSync,
-  type ChildProcessWithoutNullStreams,
-} from "node:child_process";
+import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { StringDecoder } from "node:string_decoder";
 
 import { CodexJsonlParser, type CodexUsage } from "./jsonl.js";
 
 const DEFAULT_TIMEOUT_MILLISECONDS = 5 * 60 * 1_000;
 const DEFAULT_MAX_OUTPUT_BYTES = 2 * 1024 * 1024;
-const DEFAULT_MODEL = "gpt-5.6-sol";
-const DEFAULT_REASONING_EFFORT = "medium";
 const MAX_PROMPT_LENGTH = 32_000;
 const THREAD_ID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/iu;
@@ -90,58 +78,13 @@ export function buildCodexChildEnvironment(
   env: NodeJS.ProcessEnv,
 ): NodeJS.ProcessEnv {
   const child: NodeJS.ProcessEnv = {
-    HOME: env.HOME,
-    PATH: env.PATH,
-    LANG: env.LANG ?? "C.UTF-8",
-    LC_ALL: env.LC_ALL,
-    LC_CTYPE: env.LC_CTYPE,
-    CODEX_HOME: env.CODEX_HOME,
-    CODEX_SQLITE_HOME: env.CODEX_SQLITE_HOME,
-    CODEX_CA_CERTIFICATE: env.CODEX_CA_CERTIFICATE,
-    SSL_CERT_FILE: env.SSL_CERT_FILE,
+    ...env,
     TZ: "Asia/Seoul",
     RUST_LOG: "error",
     NO_COLOR: "1",
   };
-
-  for (const key of Object.keys(child)) {
-    if (child[key] === undefined) {
-      delete child[key];
-    }
-  }
+  delete child.BEARHOMEBOT_TELEGRAM_TOKEN;
   return child;
-}
-
-export function codexFilesystemProfile(
-  executablePath: string,
-  additionalReadPaths: readonly string[] = [],
-): string {
-  const entries = [
-    `":root"="deny"`,
-    `":minimal"="read"`,
-    `":workspace_roots"={"."="read"}`,
-    `${JSON.stringify(executablePath)}="read"`,
-    ...additionalReadPaths.map((path) => `${JSON.stringify(path)}="read"`),
-  ];
-  return `{${entries.join(",")}}`;
-}
-
-export function prepareCodexWorkspace(
-  workspace: string,
-  env: NodeJS.ProcessEnv = process.env,
-): void {
-  mkdirSync(workspace, { recursive: true, mode: 0o700 });
-  if (existsSync(join(workspace, ".git"))) {
-    return;
-  }
-
-  const result = spawnSync("git", ["init", "--quiet", workspace], {
-    env: buildCodexChildEnvironment(env),
-    encoding: "utf8",
-  });
-  if (result.status !== 0) {
-    throw new Error("Failed to initialize the dedicated Codex workspace");
-  }
 }
 
 export class CodexRunner {
@@ -189,20 +132,7 @@ export class CodexRunner {
   }
 
   #codexArguments(threadId: string | undefined): string[] {
-    const commonConfiguration = [
-      "--model",
-      DEFAULT_MODEL,
-      "--ignore-user-config",
-      "--strict-config",
-      "-c",
-      `model_reasoning_effort=${JSON.stringify(DEFAULT_REASONING_EFFORT)}`,
-      "-c",
-      'approval_policy="never"',
-      "-c",
-      'default_permissions="bearhomebot"',
-      "-c",
-      `permissions.bearhomebot.filesystem=${codexFilesystemProfile(this.#executable)}`,
-    ];
+    const commonConfiguration = ["--dangerously-bypass-approvals-and-sandbox"];
 
     if (threadId) {
       return [

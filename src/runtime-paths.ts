@@ -7,13 +7,6 @@ export interface RuntimePaths {
   dataDir: string;
   cacheDir: string;
   stateDatabase: string;
-  codexWorkspace: string;
-  kSkillRoot: string;
-  kSkillMirror: string;
-  kSkillCandidateRoot: string;
-  kSkillReviewWorkspace: string;
-  kSkillUpdateLock: string;
-  releaseRoot: string;
 }
 
 export interface RuntimePathOptions {
@@ -72,20 +65,11 @@ export function resolveRuntimePaths(
     "XDG_CACHE_HOME",
     join(home, ".cache", "bearhomebot"),
   );
-  const kSkillRoot = join(dataDir, "k-skill");
-
   return {
     configDir,
     dataDir,
     cacheDir,
     stateDatabase: join(dataDir, "state.sqlite"),
-    codexWorkspace: join(dataDir, "codex-workspace"),
-    kSkillRoot,
-    kSkillMirror: join(kSkillRoot, "mirror.git"),
-    kSkillCandidateRoot: join(kSkillRoot, "review-candidates"),
-    kSkillReviewWorkspace: join(kSkillRoot, "review-workspace"),
-    kSkillUpdateLock: join(kSkillRoot, "update.lock"),
-    releaseRoot: join(kSkillRoot, "releases"),
   };
 }
 
@@ -93,16 +77,7 @@ export async function ensureRuntimeDirectories(
   paths: RuntimePaths,
 ): Promise<void> {
   await Promise.all(
-    [
-      paths.configDir,
-      paths.dataDir,
-      paths.cacheDir,
-      paths.codexWorkspace,
-      paths.kSkillRoot,
-      paths.kSkillCandidateRoot,
-      paths.kSkillReviewWorkspace,
-      paths.releaseRoot,
-    ].map(async (directory) => {
+    [paths.configDir, paths.dataDir, paths.cacheDir].map(async (directory) => {
       await mkdir(directory, { recursive: true, mode: 0o700 });
     }),
   );

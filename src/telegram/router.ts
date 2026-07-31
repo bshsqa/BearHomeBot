@@ -1,3 +1,5 @@
+import { hostname } from "node:os";
+
 import type { TelegramUpdate } from "./types.js";
 
 interface TelegramActionBase {
@@ -24,7 +26,13 @@ export type TelegramAction =
       callbackQueryId?: string;
     })
   | (TelegramActionBase & {
-      kind: "list_capabilities";
+      kind: "list_features";
+      callbackQueryId?: string;
+    })
+  | (TelegramActionBase & {
+      kind: "show_feature_category";
+      callbackQueryId: string;
+      categoryId: string;
     })
   | (TelegramActionBase & {
       kind: "new_session";
@@ -100,6 +108,23 @@ export function routeTelegramUpdate(
         kind: "answer_callback",
         callbackQueryId: callback.id,
         text: "승인되지 않은 사용자야.",
+      };
+    }
+
+    if (callback.data === "features:menu") {
+      return {
+        ...base,
+        kind: "list_features",
+        callbackQueryId: callback.id,
+      };
+    }
+    const featureMatch = /^features:([a-z]+)$/u.exec(callback.data ?? "");
+    if (featureMatch?.[1]) {
+      return {
+        ...base,
+        kind: "show_feature_category",
+        callbackQueryId: callback.id,
+        categoryId: featureMatch[1],
       };
     }
 
@@ -199,11 +224,11 @@ export function routeTelegramUpdate(
     return {
       ...base,
       kind: "reply",
-      text: "BearHomeBot Telegram 연결 정상. 이 응답은 Ubuntu PC에서 보냈어.",
+      text: `BearHomeBot 연결 정상.\n호스트: ${hostname()}`,
     };
   }
-  if (command?.name === "skills") {
-    return { ...base, kind: "list_capabilities" };
+  if (command?.name === "features") {
+    return { ...base, kind: "list_features" };
   }
   if (command?.name === "newsession") {
     const action: TelegramAction = { ...base, kind: "new_session" };

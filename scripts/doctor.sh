@@ -2,6 +2,8 @@
 set -uo pipefail
 
 PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# shellcheck source=scripts/node-env.sh
+source "$PROJECT_ROOT/scripts/node-env.sh"
 PASS_COUNT=0
 WARN_COUNT=0
 FAIL_COUNT=0
@@ -112,18 +114,6 @@ check_commands() {
     fail "Git is not installed"
   fi
 
-  if version="$(command_version tar --version)"; then
-    pass "$version"
-  else
-    fail "GNU tar is not installed"
-  fi
-
-  if version="$(command_version flock --version)"; then
-    pass "$version"
-  else
-    fail "flock is not installed"
-  fi
-
   if version="$(command_version node --version)"; then
     node_version="${version#v}"
     node_major="${node_version%%.*}"
@@ -161,20 +151,6 @@ check_commands() {
   else
     fail "Codex CLI is not installed"
   fi
-
-}
-
-check_systemd() {
-  if ! command -v systemctl >/dev/null 2>&1; then
-    fail "systemctl is not installed"
-    return
-  fi
-
-  if [[ -d /run/systemd/system ]]; then
-    pass "systemd is running"
-  else
-    fail "systemd is not running"
-  fi
 }
 
 check_disk_space() {
@@ -208,6 +184,12 @@ check_git_boundaries() {
     fail "k-skill must be ignored by the BearHomeBot repository"
   fi
 
+  if [[ -d "$PROJECT_ROOT/k-skill/.git" ]]; then
+    pass "k-skill checkout is available inside the Codex workspace"
+  else
+    warn "k-skill is not checked out; run ./scripts/sync-k-skill.sh"
+  fi
+
   tracked_sensitive="$(
     git -C "$PROJECT_ROOT" ls-files |
       awk '
@@ -215,8 +197,7 @@ check_git_boundaries() {
         /(^|\/)secrets\.env$/ ||
         /^\.runtime\// ||
         /^data\// ||
-        /^logs\// ||
-        /^k-skill\// { print }
+        /^logs\// { print }
       '
   )"
 
@@ -254,7 +235,6 @@ check_operating_system
 check_architecture
 check_timezone
 check_commands
-check_systemd
 check_disk_space
 check_git_boundaries
 

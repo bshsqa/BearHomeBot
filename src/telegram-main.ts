@@ -1,5 +1,7 @@
-import { CodexRunner, prepareCodexWorkspace } from "./codex/runner.js";
-import { ActiveKSkillCatalog } from "./capability/catalog.js";
+import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+
+import { CodexRunner } from "./codex/runner.js";
 import {
   ensureRuntimeDirectories,
   resolveRuntimePaths,
@@ -12,6 +14,7 @@ import { TelegramController } from "./telegram/controller.js";
 
 process.umask(0o077);
 
+const projectRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const abortController = new AbortController();
 let store: StateStore | undefined;
 
@@ -28,21 +31,19 @@ try {
   const config = loadTelegramConfig();
   const paths = resolveRuntimePaths();
   await ensureRuntimeDirectories(paths);
-  prepareCodexWorkspace(paths.codexWorkspace);
 
   store = new StateStore(paths.stateDatabase);
   store.importBootstrapUsers(config.allowedUserIds);
 
   const client = new TelegramClient(config.token);
   const runner = new CodexRunner({
-    workspace: paths.codexWorkspace,
+    workspace: projectRoot,
     timeoutMilliseconds: config.codexTimeoutMilliseconds,
   });
   const controller = new TelegramController({
     client,
     store,
     runner,
-    catalog: new ActiveKSkillCatalog(store),
   });
 
   await runTelegramBot(client, config, controller, abortController.signal);

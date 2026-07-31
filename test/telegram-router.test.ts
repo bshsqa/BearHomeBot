@@ -85,7 +85,7 @@ test("routes allowed text to a Codex prompt", () => {
   });
 });
 
-test("keeps natural-language skill questions with Codex and reserves /skills for the direct catalog", () => {
+test("routes natural-language skill questions through ordinary Codex handling", () => {
   for (const text of [
     "너 가능한 kskill 뭐 있어?",
     "k-skill로 할 수 있는 기능 리스트 알려줘",
@@ -98,7 +98,38 @@ test("keeps natural-language skill questions with Codex and reserves /skills for
   }
   assert.equal(
     routeTelegramUpdate(privateMessage("/skills"), new Set(["1001"]))?.kind,
-    "list_capabilities",
+    "reply",
+  );
+});
+
+test("routes the feature menu command and category callbacks", () => {
+  assert.deepEqual(
+    routeTelegramUpdate(privateMessage("/features"), new Set(["1001"])),
+    {
+      kind: "list_features",
+      updateId: 10,
+      userId: "1001",
+      chatId: 1001,
+    },
+  );
+  assert.deepEqual(
+    routeTelegramUpdate(
+      sessionCallback("features:business"),
+      new Set(["1001"]),
+    ),
+    {
+      kind: "show_feature_category",
+      updateId: 11,
+      userId: "1001",
+      chatId: 1001,
+      callbackQueryId: "callback-1",
+      categoryId: "business",
+    },
+  );
+  assert.equal(
+    routeTelegramUpdate(sessionCallback("features:menu"), new Set(["1001"]))
+      ?.kind,
+    "list_features",
   );
 });
 
